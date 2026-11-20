@@ -55,9 +55,10 @@ import {
   usedByAgentNames,
 } from "./local-model-agents";
 import { FeaturedModelSpotlight } from "./featured-model-spotlight";
-import { AdvancedDialog } from "./local-model-details";
+import { AdvancedDialog, MemoryBreakdownPopover } from "./local-model-details";
 import { ModelRow } from "./local-model-row";
 import {
+  DownloadLowMemoryDialog,
   MakeRoomDialog,
   RemoveModelDialog,
   UnloadModelDialog,
@@ -85,9 +86,11 @@ import {
   type LocalModelsView,
 } from "./local-models-queries";
 import {
+  downloadMemoryCheck,
   downloadStopped,
   featuredInklingEntry,
   formatGigabytes,
+  headerMemoryBreakdown,
   hostBlocker,
   joinList,
   loadCheck,
@@ -130,6 +133,7 @@ function isModelSourceOffline(
 
 type Dialog =
   | { kind: "advanced" }
+  | { kind: "downloadLowMemory"; modelId: string }
   | { kind: "makeRoom"; modelId: string }
   | { kind: "remove"; modelId: string }
   | { kind: "unload"; modelId: string };
@@ -347,16 +351,18 @@ function MemorySummaryCard({
               used: formatGigabytes(summary.usedBytes, t),
             })}
           </p>
-          <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
-            {view.observed_at
-              ? t(m.memoryFreeChecked, {
-                  free: formatGigabytes(summary.freeBytes, t),
-                  time: relativeTime(view.observed_at, translation),
-                })
-              : t(m.memoryFree, {
-                  free: formatGigabytes(summary.freeBytes, t),
-                })}
-          </p>
+          <div className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+            <MemoryBreakdownPopover breakdown={headerMemoryBreakdown(view, t)}>
+              {view.observed_at
+                ? t(m.memoryFreeChecked, {
+                    free: formatGigabytes(summary.freeBytes, t),
+                    time: relativeTime(view.observed_at, translation),
+                  })
+                : t(m.memoryFree, {
+                    free: formatGigabytes(summary.freeBytes, t),
+                  })}
+            </MemoryBreakdownPopover>
+          </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           {canRecheck ? (
@@ -1349,6 +1355,14 @@ function Library({
     action.mutate(input);
   }
 
+  function download(entry: ModelEntry) {
+    if (downloadMemoryCheck(view, entry.model)) {
+      setDialog({ kind: "downloadLowMemory", modelId: entry.model.id });
+    } else {
+      act({ action: "download", modelId: entry.model.id });
+    }
+  }
+
   function load(entry: ModelEntry) {
     if (loadCheck(view, entry.model))
       setDialog({ kind: "makeRoom", modelId: entry.model.id });
@@ -1409,7 +1423,7 @@ function Library({
             : undefined
         }
         onCancel={() => act({ action: "cancel", modelId })}
-        onDownload={() => act({ action: "download", modelId })}
+        onDownload={() => download(entry)}
         onLoad={() => load(entry)}
         onRemove={() => setDialog({ kind: "remove", modelId })}
         onToggle={() =>
@@ -1630,7 +1644,34 @@ function Library({
       )}
 
       {dialog?.kind === "advanced" ? (
-        <AdvancedDialog onClose={() => setDialog(null)} view={view} />
+        <AdvancedDialog
+          canRecheck={!offline && !readOnly}
+          onClose={() => setDialog(null)}
+          onRecheck={onRefresh}
+          rechecking={rechecking}
+          view={view}
+        />
+      ) : null}
+      {dialogEntry && dialog?.kind === "downloadLowMemory" ? (
+        <DownloadLowMemoryDialog
+          check={downloadMemoryCheck(view, dialogEntry.model)}
+          disabled={offline || readOnly || requests.has(dialogEntry.model.id)}
+          entry={dialogEntry}
+          onClose={() => setDialog(null)}
+          onDownloadAndLoad={() =>
+            act({ action: "download", modelId: dialogEntry.model.id })
+          }
+          onDownloadOnly={() =>
+            act({
+              action: "download",
+              modelId: dialogEntry.model.id,
+              noAutoload: true,
+            })
+          }
+          onRecheck={!offline && !readOnly ? onRefresh : undefined}
+          rechecking={rechecking}
+          view={view}
+        />
       ) : null}
       {dialogEntry && makeRoom ? (
         <MakeRoomDialog

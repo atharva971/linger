@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -87,11 +88,30 @@ func TestLocalModelsCommandAnswersAcceptedOrRefused(t *testing.T) {
 	}
 	library.refusal = nil
 
+	event, frame = send(map[string]any{"action": "download", "model_id": "qwen3-4b:Q4_K_M", "no_autoload": true})
+	if event.Type != protocol.EventCapabilityLocalModelsAccepted || frame["outcome"] != "accepted" {
+		t.Fatalf("no_autoload download = %s %v", event.Type, frame)
+	}
+	if got := library.actions[len(library.actions)-1]; got.Name != "download" || !got.NoAutoload {
+		t.Fatalf("action = %+v", got)
+	}
+
+	event, frame = send(map[string]any{"action": "download", "model_id": "qwen3-4b:Q4_K_M", "no_autoload": false})
+	if event.Type != protocol.EventCapabilityLocalModelsAccepted || frame["outcome"] != "accepted" {
+		t.Fatalf("no_autoload=false download = %s %v", event.Type, frame)
+	}
+	if got := library.actions[len(library.actions)-1]; got.Name != "download" || got.NoAutoload {
+		t.Fatalf("action = %+v", got)
+	}
+
 	calls := len(library.actions)
 	for _, invalid := range []map[string]any{
 		{"action": "download", "model_id": "--base-dir=/tmp"},
 		{"action": "refresh", "model_id": "qwen3-4b:Q4_K_M"},
 		{"action": "unload", "model_id": "qwen3-4b:Q4_K_M", "unload_first": []string{"other:Q4"}},
+		{"action": "load", "model_id": "qwen3-4b:Q4_K_M", "no_autoload": true},
+		{"action": "load", "model_id": "qwen3-4b:Q4_K_M", "no_autoload": false},
+		{"action": "refresh", "no_autoload": false},
 		{"action": "format", "model_id": "qwen3-4b:Q4_K_M"},
 	} {
 		if _, frame := send(invalid); frame["outcome"] != "refused" || frame["refusal"].(map[string]any)["code"] != "MODEL_UNKNOWN" {
@@ -397,5 +417,82 @@ func TestPublishLocalModelsDowngradesDiagnosticsForOlderServices(t *testing.T) {
 		m0.Concurrency == nil || *m0.Concurrency != 1 ||
 		m0.HostRamBytes == nil || *m0.HostRamBytes != hostRAM {
 		t.Fatalf("full frame lost engine fields: %+v", m0)
+	}
+}
+
+func TestPublishLocalModelsMemoryBreakdownFollowsWelcome(t *testing.T) {
+	fits, need, free, reserve := false, uint64(16<<30), uint64(8<<30), uint64(0)
+	snapshot := wire.LocalModelsSnapshot{
+		Available:  true,
+		ObservedAt: "2026-11-22T00:00:00Z",
+		Debug:      &wire.LocalModelsDebugInfo{Mode: "tiny", Source: "env"},
+		Host: &wire.LocalModelHost{
+			RamAvailableBytes: &free, MetalWorkingSetBytes: &need, MemoryPressure: "warn",
+		},
+		Models: []wire.LocalModel{{Engine: "polystrata", FitsNow: &fits, LoadNeedBytes: &need, LoadFreeBytes: &free}},
+		Pools:  []wire.LocalModelPool{{ReserveBytes: &reserve}},
+	}
+	d := &Daemon{
+		computerID: "computer", protocolVersion: protocol.Version,
+		ledger: NewMemoryLedger(), welcomedEpochs: make(map[uint64]bool),
+	}
+	for i, test := range []struct {
+		name      string
+		features  []string
+		engine    bool
+		breakdown bool
+	}{
+		{"current gateway", []string{"local_models", "local_models_diagnostics", "local_models_engine", "local_models_memory_breakdown"}, true, true},
+		{"older 0.61 gateway with diagnostics and engine", []string{"local_models", "local_models_diagnostics", "local_models_engine"}, true, false},
+		{"older gateway with diagnostics", []string{"local_models", "local_models_diagnostics"}, false, false},
+		{"reconnect to current gateway", []string{"local_models", "local_models_diagnostics", "local_models_engine", "local_models_memory_breakdown"}, true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stream := &browserEventStream{}
+			err := d.acceptRunnerWelcome(t.Context(), t.Context(), stream, protocol.Command{
+				ConnectionEpoch: uint64(i + 1), ServiceFeatures: test.features,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.PublishLocalModels(snapshot)
+			d.clearDiagnosticsStream(stream)
+			d.PublishLocalModels(snapshot)
+			if len(stream.events) != 1 || stream.events[0].Type != protocol.EventLocalModels {
+				t.Fatalf("events = %+v", stream.events)
+			}
+			var frame wire.RunnerLocalModels
+			if err := json.Unmarshal(stream.events[0].Payload, &frame); err != nil {
+				t.Fatal(err)
+			}
+			got := frame.LocalModels
+			if got.Debug == nil || got.Debug.Mode != "tiny" {
+				t.Fatalf("snapshot lost negotiated diagnostics: %+v", got.Debug)
+			}
+			model, host, pool := got.Models[0], got.Host, got.Pools[0]
+			if test.engine && model.Engine != "polystrata" {
+				t.Fatalf("snapshot lost negotiated engine: %+v", model)
+			}
+			if !test.engine && model.Engine != "" {
+				t.Fatalf("older gateway received engine: %+v", model)
+			}
+			if test.breakdown {
+				if model.FitsNow == nil || *model.FitsNow || model.LoadNeedBytes == nil || *model.LoadNeedBytes != need ||
+					model.LoadFreeBytes == nil || *model.LoadFreeBytes != free || host.RamAvailableBytes == nil ||
+					*host.RamAvailableBytes != free || host.MetalWorkingSetBytes == nil || *host.MetalWorkingSetBytes != need ||
+					host.MemoryPressure != "warn" || pool.ReserveBytes == nil || *pool.ReserveBytes != reserve {
+					t.Fatalf("snapshot lost negotiated memory fields: model %+v, host %+v, pool %+v", model, host, pool)
+				}
+				return
+			}
+			for _, field := range []string{
+				"fits_now", "load_need_bytes", "load_free_bytes", "ram_available_bytes",
+				"metal_working_set_bytes", "memory_pressure", "reserve_bytes",
+			} {
+				if bytes.Contains(stream.events[0].Payload, []byte(`"`+field+`":`)) {
+					t.Errorf("older gateway received %s: %s", field, stream.events[0].Payload)
+				}
+			}
+		})
 	}
 }

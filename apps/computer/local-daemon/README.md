@@ -210,8 +210,11 @@ model.
   compatibly (unknown `engine` or out-of-range `concurrency` is omitted,
   `engine_label` is clipped) and sent only when `runner.welcome`'s
   `service_features` names `local_models_engine` (Computer 0.61.0 or later).
-  The snapshot is sent after
-  every welcome, after every action or job end, and at most every 2 seconds
+  Computer 0.62.0 supports download without loading via `no_autoload` and sends
+  the optional live fit, host memory, and pool reserve fields only after a
+  welcome names `local_models_memory_breakdown`.
+  The Daemon sends a snapshot after every local-models welcome, after every
+  action or job end, and at most every 2 seconds
   for progress. When a job enters the `download` phase, the Daemon publishes
   that progress line onto the current snapshot right away so refreshes do not
   see the stale `absent` state while `library status` runs, then rereads the

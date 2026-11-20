@@ -81,12 +81,16 @@ and the `LocalModel*` definitions of `runner-gateway/envelope.schema.json`.
 Actions go Web → TeamHub → Agent Service → Computer → `localmodels`:
 
 1. Web posts `actOnLocalComputerModel`
-   (`POST /v0/tenants/{tenantId}/local-computers/{computerId}/local-models/{modelId}/actions`).
+   (`POST /v0/tenants/{tenantId}/local-computers/{computerId}/local-models/{modelId}/actions`)
+   or `refreshLocalComputerModels`
+   (`POST /v0/tenants/{tenantId}/local-computers/{computerId}/local-models`).
    Only the Computer owner may act.
 2. TeamHub calls Node Services `actOnLocalComputerModels`
    (`POST /v1/tenants/{tenantId}/owners/{ownerActorId}/local-computers/{computerId}/local-model-actions`).
-3. Agent Service sends `execute` with kind `local_models` (download, cancel,
-   load with `unload_first`, unload, remove, or refresh). The Daemon answers
+3. Agent Service sends `execute` with kind `local_models` (download with optional
+   `no_autoload`, cancel, load with `unload_first`, unload, remove, or refresh).
+   Agent Service sends `no_autoload: true` only to Computer 0.62.0 or later
+   (`FIRST_LOCAL_MODEL_DOWNLOAD_ONLY_COMPUTER_VERSION`). The Daemon answers
    `executed` with outcome `accepted` or `refused` at once and runs the
    `localmodels library` job itself. The ack returns to TeamHub as
    `LocalModelActionAck`; a refusal becomes a `LocalModelsErrorCode`.
@@ -110,6 +114,11 @@ Progress and outcomes travel back only as snapshots:
    `host_ram_bytes`) is sent only when `runner.welcome`'s `service_features`
    declares `local_models_engine` (`FIRST_LOCAL_MODELS_ENGINE_COMPUTER_VERSION`,
    `0.61.0`); otherwise the Daemon strips those fields for older Agent Services.
+   Agent Service advertises `local_models_memory_breakdown` only to Computer
+   0.62.0 or later (`FIRST_LOCAL_MODELS_MEMORY_BREAKDOWN_COMPUTER_VERSION`).
+   The Daemon includes `fits_now`, `load_need_bytes`, `load_free_bytes`,
+   `ram_available_bytes`, `metal_working_set_bytes`, `memory_pressure`, and
+   `reserve_bytes` only when the welcome names that feature.
 2. Agent Service records it through TeamHub `recordAgentRuntimeLocalModels`
    (`POST /v0/agent-runtime/local-computers/local-models`). TeamHub keeps the
    latest snapshot per Computer, so an offline Computer shows what it last
