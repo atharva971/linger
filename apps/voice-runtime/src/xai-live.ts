@@ -110,7 +110,12 @@ const latestWordsLimit = 160;
  * tool descriptions pulled Chinese replies into English mid-sentence (a Chinese
  * “it is written” followed by “titled …, open beside the chat”). The reminder
  * sits where the reply starts and quotes the user's latest words, so the model
- * sees which language to keep without any language being named here.
+ * sees which language to keep without any language being named here. The
+ * same spot holds the first person: reported from a result alone, finished
+ * work came out as things that happened by themselves (“it is open beside
+ * the chat”). Asked to speak after every result, the voice narrated each step
+ * of a chain instead, reading out folder names and English results, so a
+ * result that leads to another call is answered by that call alone.
  */
 export function withLanguage(output: string, latestWords?: string) {
   const words = latestWords?.trim();
@@ -121,7 +126,7 @@ export function withLanguage(output: string, latestWords?: string) {
       : words;
   return `${output}
 
-Reply in the language of the user's latest words (“${quoted}”), every word except names of people, companies, products and apps, whatever language this result is in.`;
+If this result leads to another tool call for the same request, make that call now without a word, and speak only with the answer. When you speak, reply in the language of the user's latest words (“${quoted}”), every word except names of people, companies, products and apps, whatever language this result is in, and say what you did with I as its subject, the word for I in their language, even where that language usually leaves the subject out.`;
 }
 
 const maximumQueuedEvents = 2_048;

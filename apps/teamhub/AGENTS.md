@@ -75,8 +75,27 @@ Go service owning Human HTTP/SSE, Agent callbacks, and active product state.
   card cannot send it again. `GET` reports `sent` whenever the header says so, and
   `can_edit`; only editors may send or decline. While the latest content is
   still rendering these routes answer 503 with `Retry-After`.
+- The live voice's About the User holds the Human's whole memory.md and the
+  email addresses they use: their own (login, active Gmail connection,
+  addresses in the current Profile) and up to ten recipients of Gmail
+  canvases they sent, read from `document_texts`. A heard recipient whose name
+  or domain sounds like one of theirs takes that part and is said back; all
+  of it goes to the voice provider with the instructions.
+- Live whole-document rewrites preserve top-level image, file, audio and video
+  blocks. The model keeps their exported `document-asset:` lines in order;
+  missing, repeated or reordered markers are rejected before any write.
+  Nested media requires targeted text edits. Text runs are edited from last
+  to first with revision checks; a conflict stops the rewrite and reports
+  whether earlier runs changed. Gmail canvases keep their separate header,
+  body and attachment rules; an inline image still blocks a body rewrite.
 - Live voice write tools that finish a send return a `next` asking the model
   to say it was sent; a result without one can leave the voice silent.
+- The live voice's persona is warm and lightly playful and says what it does
+  in the first person; Voice Runtime's tone rules have each reply open with a
+  brief reaction and keep it to two or three short sentences. Humor softens
+  when the user is rushed or upset. Started work is not done; its
+  acknowledgement must not repeat an already-spoken preamble. Change the
+  persona here and the tone rules in Voice Runtime together.
 - Live voice writes need the user's yes from a turn after the question
   (`voiceLiveConfirmed`), except `voicelive.DirectYesTools`: sending a Gmail
   canvas, which is open beside the chat, runs when the user's own turn told

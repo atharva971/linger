@@ -399,7 +399,7 @@ describe("XaiLiveSession", () => {
     const item = provider.sent.at(-1)?.item as { output: string };
     expect(item.output.startsWith('{"status":"created"}')).toBe(true);
     expect(item.output).toContain(
-      `Reply in the language of the user's latest words (“${spanishRequest}”)`,
+      `reply in the language of the user's latest words (“${spanishRequest}”)`,
     );
     await session.close();
   });
@@ -985,7 +985,11 @@ describe("withLanguage", () => {
     expect(withLanguage("ok")).toBe("ok");
     expect(withLanguage("ok", "  ")).toBe("ok");
     const long = withLanguage("ok", "word ".repeat(100));
-    expect(long.startsWith("ok\n\nReply in the language")).toBe(true);
+    expect(
+      long.startsWith("ok\n\nIf this result leads to another tool call"),
+    ).toBe(true);
     expect(long).toContain("…”)");
+    expect(long).toContain("with I as its subject");
+    expect(long).toContain("make that call now without a word");
   });
 });

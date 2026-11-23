@@ -85,7 +85,7 @@ func (s *Service) openVoiceLiveEmailCanvas(ctx context.Context, session voiceliv
 	}
 	return voicelive.Output(map[string]string{
 		"status": "opened", "document_id": created.DocumentID, "revision_id": created.RevisionID,
-		"next": "First tell the user in one short sentence what the email says: its subject and main points, in your own words. Then say it is open beside the chat for them to change, and only then ask for anything missing, such as a recipient.",
+		"next": "Hand it over like a friend would, in your own words with I as the subject: the gist of what you wrote in a few words (not every point), then that you put it beside the chat for them to change, and only then ask for anything missing, such as a recipient.",
 	}), nil
 }
 
@@ -263,10 +263,10 @@ func (s *Service) applyVoiceLiveEmailEdit(ctx context.Context, session voicelive
 			kept = 1
 		}
 		for index := len(runs) - 1; index >= kept; index-- {
-			edits = append(edits, voiceLiveRunEdit("block_delete", runs[index]))
+			edits = append(edits, voicelive.BlockRunEdit("block_delete", runs[index]))
 		}
 		if replace {
-			edit := voiceLiveRunEdit("block_replace", runs[0])
+			edit := voicelive.BlockRunEdit("block_replace", runs[0])
 			edit["content"] = body
 			edits = append(edits, edit)
 		} else {
@@ -311,7 +311,7 @@ func (s *Service) applyVoiceLiveEmailEdit(ctx context.Context, session voicelive
 	}
 	return voicelive.Output(map[string]string{
 		"status": "changed", "document_id": args.DocumentID, "revision_id": revisionID,
-		"next": "Tell the user in one short sentence what you changed in the email.",
+		"next": "Tell the user in one short, warm sentence of your own what you changed in the email, as something you did.",
 	}), false, nil
 }
 
@@ -414,14 +414,6 @@ func (s *Service) attachVoiceLiveEmailFile(ctx context.Context, session voiceliv
 	}
 }
 
-// voiceLiveRunEdit names a run of sibling blocks for a block edit.
-func voiceLiveRunEdit(command string, run []string) map[string]string {
-	if len(run) == 1 {
-		return map[string]string{"command": command, "block_id": run[0]}
-	}
-	return map[string]string{"command": command, "start_block_id": run[0], "end_block_id": run[len(run)-1]}
-}
-
 func voiceLiveCanvasError(err error) (string, bool) {
 	switch {
 	case errors.Is(err, document.ErrNotFound):
@@ -483,6 +475,7 @@ type voiceLiveCanvasBlock struct {
 	Type  string `json:"type"`
 	Props struct {
 		Name string `json:"name"`
+		URL  string `json:"url"`
 	} `json:"props"`
 	Children []voiceLiveCanvasBlock `json:"children"`
 }

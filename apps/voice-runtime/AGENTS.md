@@ -28,6 +28,8 @@
 
 ## Invariants
 
+- Live speech is warm and short: every reply, a quick yes or a lookup included, opens with a brief reaction or light touch and then the point, within two or three short sentences (about fifteen seconds). Words before a tool react to the user and say the plan in the first person, never a progress label, the user's own sentence or an opener already used in the call. A tool result that leads to another call gets that call without words. Task reports pass on what the user cares about, leaving out technical details unless asked. Accepted work is not finished work. TeamHub owns the matching persona and tool-result guidance; change both together.
+
 - Never log audio bytes, transcript text, LiveKit tokens, TeamHub tokens, or provider credentials.
 - A fatal `chat_dictation` failure sets three Agent participant attributes for the Web client: `linger.voice_dictation_failure` (always `transcript_unconfirmed`; older clients read only this flag), `linger.voice_dictation_failure_code` (the logged failure code), and `linger.voice_dictation_failure_generation`. Soniox's `error_code` 401, 402 and 403 become `asr_auth_rejected`, `asr_balance_exhausted` and `asr_permission_denied`; a connection that never reaches the provider is `network_dns`, `network_refused`, `network_tls`, `network_reset`, `network_pipe` or `network_timeout`. The Web client words the codes it knows and shows its generic message for any other, so adding a code needs no client release.
 - Partial observations are transient; TeamHub decides which final observations become product truth.

@@ -167,3 +167,15 @@ func TestCanvasSourceDigestTracksMailContentButNotDeliveryStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestCanvasHeaderFromMarkdownReadsTheStoredHeader(t *testing.T) {
+	header, ok := CanvasHeaderFromMarkdown("```text\ncanvas: gmail\nto: amy@example.com, bo@example.com\ncc: \nsubject: Plan\n```\n\nHi Amy,\n\nto: not a header line")
+	if !ok || header.Target != "gmail" || header.Fields["to"] != "amy@example.com, bo@example.com" || header.Fields["subject"] != "Plan" {
+		t.Fatalf("header=%+v ok=%v", header, ok)
+	}
+	for _, markdown := range []string{"Hi Amy,\n\nto: amy@example.com", "```text\ncanvas: gmail\nto: amy@example.com", "```text\nsubject: no canvas line\n```"} {
+		if _, ok := CanvasHeaderFromMarkdown(markdown); ok {
+			t.Fatalf("read a header from %q", markdown)
+		}
+	}
+}

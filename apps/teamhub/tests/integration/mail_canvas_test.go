@@ -74,7 +74,7 @@ func TestHumanSendsAGmailCanvasOnlyWhenSendIsClicked(t *testing.T) {
 		defer mu.Unlock()
 		return saves, sends
 	}
-	env, alice, _, sessionID := newVoiceLiveRoomWith(t, []appOption{starting(app.JobQueue)}, func(cfg *config.Config) {
+	env, alice, _, sessionID := newVoiceLiveRoomWith(t, []appOption{starting(app.JobQueue, app.DocumentTextJobs)}, func(cfg *config.Config) {
 		cfg.RoomDocument.RuntimeURL = runtime.URL
 		composioFake.configure(cfg)
 	})
@@ -187,6 +187,21 @@ func TestHumanSendsAGmailCanvasOnlyWhenSendIsClicked(t *testing.T) {
 	// though no editor wrote the sent status into the canvas header.
 	if again := voice("mail-voice", "send_email_canvas", map[string]any{"document_id": documentID, "confirmed": true}); again["error"] != "already_sent" {
 		t.Fatalf("voice resend=%v", again)
+	}
+	// A sent email's recipient is one the live voice matches a misheard
+	// address against, beside the user's own connected mailbox.
+	liveDeadline := time.Now().Add(20 * time.Second)
+	for {
+		var live teamhubinternal.VoiceLiveContext
+		decode(t, voiceRuntimeCall(t, env, http.MethodGet, "/internal/v1/voice/sessions/"+sessionID+"/live-context", nil, http.StatusOK), &live)
+		if strings.Contains(live.Instructions, "Addresses they recently sent email to from here, newest first: amy@example.com") &&
+			strings.Contains(live.Instructions, "Their own email addresses: ") && strings.Contains(live.Instructions, "alice@example.test") {
+			break
+		}
+		if time.Now().After(liveDeadline) {
+			t.Fatalf("live context lists no known addresses: %q", live.Instructions[:min(len(live.Instructions), 1500)])
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	// The same click replays its receipt; another one cannot send it again.
 	if status, body := send(documentID, "request-send-00000001", draft.SourceDigest); status != http.StatusAccepted || !strings.Contains(string(body), `"sent"`) {

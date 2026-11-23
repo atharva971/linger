@@ -278,7 +278,28 @@ func ReadCanvasHeader(blocks []CanvasBlock) (CanvasHeader, bool) {
 			text.WriteString(item.Text)
 		}
 	}
-	lines := strings.Split(text.String(), "\n")
+	return readCanvasHeaderText(strings.Split(text.String(), "\n"))
+}
+
+// CanvasHeaderFromMarkdown reads the canvas header from a canvas's Markdown,
+// where the first block is written as a fenced code block.
+func CanvasHeaderFromMarkdown(markdown string) (CanvasHeader, bool) {
+	lines := strings.Split(strings.TrimLeft(markdown, "\n"), "\n")
+	if len(lines) == 0 || !strings.HasPrefix(strings.TrimSpace(lines[0]), "```") {
+		return CanvasHeader{}, false
+	}
+	for end := 1; end < len(lines); end++ {
+		if strings.TrimSpace(lines[end]) == "```" {
+			return readCanvasHeaderText(lines[1:end])
+		}
+	}
+	return CanvasHeader{}, false
+}
+
+func readCanvasHeaderText(lines []string) (CanvasHeader, bool) {
+	if len(lines) == 0 {
+		return CanvasHeader{}, false
+	}
 	match := canvasHeaderLine.FindStringSubmatch(strings.TrimSpace(lines[0]))
 	if match == nil {
 		return CanvasHeader{}, false

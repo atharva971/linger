@@ -26,12 +26,18 @@ const canvasTitleRunes = 80
 // emailCanvasDelivery says how a canvas is saved or sent, for both tools.
 const emailCanvasDelivery = "To save it in the user's Gmail as a draft use save_email_draft, and to send it send_email_canvas, when those tools are offered; otherwise call start_task with surface apps and a goal that names its document_id as a Gmail canvas and says to save it as a draft or to send it, with irreversible set for a send. "
 
+// misheardRecipient lets a recipient the speech model misheard resolve to an
+// address the user really uses, said back so a wrong match is caught before
+// sending. The name and the domain are matched apart: a known name at a new
+// domain (digits heard as letters) matched no whole listed address.
+const misheardRecipient = "Speech is often misheard, letters and digits most, so an address you heard may be off by a character or two. Check the part before @ and the domain each against the addresses listed in About the User: a part within a character or two of a listed one, or that sounds like it, is that listed part, even when the other part differs. Write it as listed, keep the other part as the user said it, and say the address back so the user can correct it. When the user means an address they used before, write that listed address. "
+
 // EmailCanvasTool describes the tool that opens a new canvas.
 var EmailCanvasTool = Tool{
 	Name: ToolOpenEmailCanvas,
 	Description: "Write a new email for the user on a canvas in this room. It opens in the side panel at once, where the user reads and edits it themselves, like the email drafts the Agent writes. " +
 		"Use it whenever the user wants a new email written or drafted, instead of start_task; answering an email someone sent is start_task with surface apps. " +
-		"to and cc hold only email addresses the user gave, separated by commas; leave them empty rather than guess, and ask for them when it is time to send. " +
+		"to and cc hold the email addresses the user gave, separated by commas; leave them empty rather than guess, and ask for them when it is time to send. " +
 		"subject is one line; body is the whole email in the language the user wants it in, plain text with a blank line between paragraphs, written only from what the user said: never invent facts, times or names. " +
 		"It returns document_id and revision_id. Then tell the user in one or two short sentences what you wrote (who it is to and the main points) and that it is open for them to look at and change; read it out in full only when they ask. " +
 		"Change it later with edit_email_canvas, and attach a file to it with attach_email_file. " + emailCanvasDelivery +
@@ -39,8 +45,8 @@ var EmailCanvasTool = Tool{
 		"missing_content means the subject or body is empty: the address is fine; ask the user what the email should say, never invent it, then call again with both. " +
 		"body_too_long means the body is too long: shorten it. invalid_email means the app refused the email as written: rewrite it plainer and call again.",
 	Parameters: objectSchema([]string{"subject", "body"}, map[string]any{
-		"to":      stringProperty("Optional recipient email addresses, separated by commas"),
-		"cc":      stringProperty("Optional carbon-copy email addresses, separated by commas"),
+		"to":      stringProperty("Optional recipient email addresses, separated by commas. " + misheardRecipient),
+		"cc":      stringProperty("Optional carbon-copy email addresses, separated by commas. " + misheardRecipient),
 		"subject": stringProperty("The subject, one line"),
 		"body":    stringProperty("The whole email body"),
 	}),
@@ -60,8 +66,8 @@ var EditEmailCanvasTool = Tool{
 	Parameters: objectSchema([]string{"document_id", "revision_id"}, map[string]any{
 		"document_id": stringProperty("The canvas, from open_email_canvas"),
 		"revision_id": stringProperty("The revision_id the last result gave for this canvas"),
-		"to":          stringProperty("Optional new recipient email addresses, separated by commas"),
-		"cc":          stringProperty("Optional new carbon-copy email addresses, separated by commas"),
+		"to":          stringProperty("Optional new recipient email addresses, separated by commas. " + misheardRecipient),
+		"cc":          stringProperty("Optional new carbon-copy email addresses, separated by commas. " + misheardRecipient),
 		"subject":     stringProperty("Optional new subject, one line"),
 		"body":        stringProperty("Optional new whole email body"),
 	}),
