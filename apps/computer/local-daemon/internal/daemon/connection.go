@@ -572,18 +572,12 @@ func (d *Daemon) heartbeatLoop(ctx context.Context, stream transport.Stream, int
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			err := stream.Send(ctx, protocol.Event{
+			_ = stream.Send(ctx, protocol.Event{
 				Type: protocol.EventRunnerHeartbeat, ProtocolVersion: d.protocolVersion,
 				RunnerID: d.computerID, SentAt: now.UTC(), Payload: mustJSON(struct {
 					ActiveOperationIDs []string `json:"active_operation_ids"`
 				}{d.activeOperationIDs()}),
 			})
-			// A failed heartbeat means the connection is gone; closing it ends
-			// Receive so the daemon reconnects instead of waiting on a dead socket.
-			if err != nil && ctx.Err() == nil {
-				_ = stream.Close()
-				return
-			}
 		}
 	}
 }

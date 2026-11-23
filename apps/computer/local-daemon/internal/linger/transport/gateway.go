@@ -143,7 +143,7 @@ func (s *gatewayStream) Receive(ctx context.Context) (protocol.Command, error) {
 	if err := s.extendReadDeadline(); err != nil {
 		return protocol.Command{}, err
 	}
-	_, encoded, err := s.socket.ReadMessage()
+	encoded, err := s.readMessage()
 	contextDeadline := s.contextDeadline
 	s.contextDeadline = time.Time{}
 	if err != nil {
@@ -162,9 +162,6 @@ func (s *gatewayStream) Receive(ctx context.Context) (protocol.Command, error) {
 				return protocol.Command{}, &DaemonIdentityInUseError{Reason: closeError.Text}
 			}
 		}
-		return protocol.Command{}, err
-	}
-	if err := s.extendReadDeadline(); err != nil {
 		return protocol.Command{}, err
 	}
 	command, err := decodeGatewayCommand(encoded)
@@ -758,6 +755,32 @@ func (s *gatewayStream) extendReadDeadline() error {
 		deadline = s.contextDeadline
 	}
 	return s.socket.SetReadDeadline(deadline)
+}
+
+// readMessage reads one message, extending the read deadline after every
+// chunk: on a slow downlink a large frame delays the peer's Pong behind it,
+// and any received byte already proves the connection is alive.
+func (s *gatewayStream) readMessage() ([]byte, error) {
+	_, reader, err := s.socket.NextReader()
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(livenessReader{reader: reader, stream: s})
+}
+
+type livenessReader struct {
+	reader io.Reader
+	stream *gatewayStream
+}
+
+func (r livenessReader) Read(buffer []byte) (int, error) {
+	n, err := r.reader.Read(buffer)
+	if n > 0 {
+		if deadlineErr := r.stream.extendReadDeadline(); deadlineErr != nil && err == nil {
+			err = deadlineErr
+		}
+	}
+	return n, err
 }
 
 // pingLoop runs until Close; a failed ping closes the stream so Receive ends.

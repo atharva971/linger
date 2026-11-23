@@ -154,3 +154,57 @@ func TestGatewayCloseStopsPings(t *testing.T) {
 		t.Fatal("Close left the ping goroutine running")
 	}
 }
+
+// A large command trickling in on a slow downlink keeps the connection alive
+// even though the peer's Pongs queue behind it.
+func TestGatewaySlowLargeCommandIsNotALivenessTimeout(t *testing.T) {
+	const chunkBytes = 4096
+	const chunks = 16
+	// NextWriter holds back one buffered chunk, so gaps reach twice the pause.
+	const pause = testReadTimeout / 4
+	body := `{"type":"runtime.registration.snapshot","protocol_version":"2",` +
+		`"command_id":"snapshot-slow","runner_id":"computer-local","connection_epoch":3,` +
+		strings.Repeat(" ", chunkBytes*chunks) + `"registrations":[]}`
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		peer, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer peer.Close()
+		// The peer never reads while it writes, so it answers no Ping.
+		message, err := peer.NextWriter(websocket.TextMessage)
+		if err != nil {
+			return
+		}
+		for offset := 0; offset < len(body); offset += chunkBytes {
+			end := min(offset+chunkBytes, len(body))
+			if _, err := message.Write([]byte(body[offset:end])); err != nil {
+				return
+			}
+			time.Sleep(pause)
+		}
+		_ = message.Close()
+		_, _, _ = peer.ReadMessage()
+	}))
+	t.Cleanup(server.Close)
+	stream, err := (GatewayControlPlane{
+		URL: "ws" + strings.TrimPrefix(server.URL, "http"), BearerToken: "test-token",
+		PingInterval: testPingInterval, ReadTimeout: testReadTimeout,
+	}).Connect(context.Background(), Hello{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+	started := time.Now()
+	command, err := stream.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("Receive failed after %v: %v", time.Since(started), err)
+	}
+	if elapsed := time.Since(started); elapsed < 3*testReadTimeout {
+		t.Fatalf("command arrived after %v, too fast to exercise the read timeout", elapsed)
+	}
+	if command.CommandID != "snapshot-slow" {
+		t.Fatalf("command=%+v, want snapshot-slow", command)
+	}
+}
