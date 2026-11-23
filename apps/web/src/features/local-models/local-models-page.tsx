@@ -1,4 +1,9 @@
-import { AiChipIcon } from "@hugeicons/core-free-icons";
+import {
+  AiChipIcon,
+  Alert02Icon,
+  InformationCircleIcon,
+  RefreshIcon,
+} from "@hugeicons/core-free-icons";
 import {
   useMutation,
   useMutationState,
@@ -12,6 +17,7 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { Icon } from "@/components/ui/icon";
+import { Skeleton } from "@/components/ui/skeleton";
 import { relativeTime } from "@/features/local-computer/computer-relative-time";
 import { useDesktopComputer } from "@/features/local-computer/desktop-computer";
 import { localComputersQueryOptions } from "@/features/local-computer/local-computer-queries";
@@ -87,6 +93,7 @@ import {
   loadCheck,
   localSwitchTargets,
   memoryGuidance,
+  memorySegments,
   memorySummary,
   modelEntries,
   poolFreeBytes,
@@ -255,12 +262,12 @@ function EmptyState({
   return (
     <section
       aria-label={title}
-      className="mt-6 flex flex-col items-center px-4 pt-12 text-center"
+      className="mt-6 flex flex-col items-center rounded-xl border border-border bg-card px-6 py-12 text-center"
     >
-      <span className="flex size-16 items-center justify-center rounded-[20%] bg-muted text-foreground">
-        <Icon icon={AiChipIcon} size={28} />
+      <span className="flex size-14 items-center justify-center rounded-2xl bg-muted text-foreground shadow-outline">
+        <Icon icon={AiChipIcon} size={24} />
       </span>
-      <h2 className="mt-6 text-xl">{title}</h2>
+      <h2 className="mt-5 text-lg text-foreground">{title}</h2>
       <p className="mt-1.5 max-w-md text-sm text-muted-foreground">
         {children}
       </p>
@@ -279,7 +286,7 @@ function ComputersLink({
 }) {
   return (
     <Link
-      className="text-foreground underline underline-offset-2"
+      className="font-medium text-app-link underline-offset-2 hover:underline"
       to={computersPath(tenantId)}
     >
       {children}
@@ -289,12 +296,148 @@ function ComputersLink({
 
 function Notice({ children }: { children: ReactNode }) {
   return (
-    <p
-      className="mt-6 rounded-xl bg-muted px-3.5 py-3 text-sm text-muted-foreground"
+    <div
+      className="mt-5 flex items-start gap-2.5 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm text-muted-foreground"
       role="status"
     >
-      {children}
-    </p>
+      <Icon
+        className="mt-0.5 shrink-0 text-muted-foreground"
+        icon={InformationCircleIcon}
+        size={16}
+      />
+      <p className="min-w-0 flex-1">{children}</p>
+    </div>
+  );
+}
+
+const memorySegmentColors = [
+  "bg-rain-500",
+  "bg-lichen-500",
+  "bg-sun-500",
+] as const;
+
+function MemorySummaryCard({
+  canRecheck,
+  onDetails,
+  onRecheck,
+  rechecking,
+  summary,
+  view,
+}: {
+  canRecheck: boolean;
+  onDetails: () => void;
+  onRecheck: () => void;
+  rechecking: boolean;
+  summary: ReturnType<typeof memorySummary>;
+  view: LocalModelsView;
+}) {
+  const translation = useTranslation();
+  const { t } = translation;
+  const { componentBytes, models, otherBytes } = memorySegments(view);
+  const pct = (bytes: number) =>
+    `${summary.totalBytes ? Math.min(100, (bytes / summary.totalBytes) * 100) : 0}%`;
+
+  return (
+    <div className="mt-5 rounded-xl border border-border bg-card px-4 py-3.5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium tabular-nums text-foreground">
+            {t(summary.gpu ? m.gpuMemoryInUse : m.memoryInUse, {
+              total: formatGigabytes(summary.totalBytes, t),
+              used: formatGigabytes(summary.usedBytes, t),
+            })}
+          </p>
+          <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+            {view.observed_at
+              ? t(m.memoryFreeChecked, {
+                  free: formatGigabytes(summary.freeBytes, t),
+                  time: relativeTime(view.observed_at, translation),
+                })
+              : t(m.memoryFree, {
+                  free: formatGigabytes(summary.freeBytes, t),
+                })}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {canRecheck ? (
+            <Button loading={rechecking} onClick={onRecheck} size="compact">
+              {rechecking ? null : <Icon icon={RefreshIcon} size={14} />}
+              {t(m.recheckMemory)}
+            </Button>
+          ) : null}
+          <Button onClick={onDetails} size="compact">
+            {t(m.details)}
+          </Button>
+        </div>
+      </div>
+      <div
+        aria-hidden
+        className="mt-3 flex h-1.5 w-full overflow-hidden rounded-full bg-muted"
+      >
+        {models.map((item, index) => (
+          <span
+            className={cn(
+              "h-full border-r-2 border-card transition-[width] duration-200 last:border-r-0 motion-reduce:transition-none",
+              memorySegmentColors[index % memorySegmentColors.length],
+            )}
+            key={item.id}
+            style={{ width: pct(item.bytes) }}
+            title={`${item.name} · ${formatGigabytes(item.bytes, t)}`}
+          />
+        ))}
+        {componentBytes > 0 ? (
+          <span
+            className="h-full border-r-2 border-card bg-muted-foreground/45 transition-[width] duration-200 last:border-r-0 motion-reduce:transition-none"
+            style={{ width: pct(componentBytes) }}
+          />
+        ) : null}
+        {otherBytes > 0 ? (
+          <span
+            className="h-full bg-muted-foreground/25 transition-[width] duration-200 motion-reduce:transition-none"
+            style={{ width: pct(otherBytes) }}
+            title={t(m.otherAppsSize, {
+              size: formatGigabytes(otherBytes, t),
+            })}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ModelsLoadingSkeleton({ label }: { label: string }) {
+  return (
+    <div aria-busy="true" className="mt-5 space-y-3" role="status">
+      <span className="sr-only">{label}</span>
+      <div className="rounded-xl border border-border bg-card px-4 py-3.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-56" />
+            <Skeleton className="h-3 w-36" />
+          </div>
+          <div className="flex gap-2">
+            <Skeleton className="h-7 w-28 rounded-full" />
+            <Skeleton className="h-7 w-16 rounded-full" />
+          </div>
+        </div>
+        <Skeleton className="mt-3 h-1.5 w-full rounded-full" />
+      </div>
+      <div className="space-y-2">
+        {[0, 1, 2].map((index) => (
+          <div
+            className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3"
+            key={index}
+          >
+            <Skeleton className="size-10 shrink-0 rounded-lg" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-3 w-52" />
+            </div>
+            <Skeleton className="h-7 w-20 rounded-full" />
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -318,8 +461,7 @@ function ComputerModels({
   ownedComputers: readonly InventoryComputer[];
   tenantId: string;
 }) {
-  const translation = useTranslation();
-  const { t } = translation;
+  const t = useT();
   const { client } = useTeamHubRuntime();
   const queryClient = useQueryClient();
   // Only the owner switches sources, and only their own Computers carry a
@@ -530,6 +672,12 @@ function ComputerModels({
     switcher.clearFeedback();
   }
 
+  const hasMemorySummary = Boolean(view?.available && summary?.totalBytes);
+  const showHeaderUtilities =
+    Boolean(view?.available) &&
+    !(shownTab === "local" && hasMemorySummary) &&
+    shownTab !== "byok";
+
   return (
     <>
       <header className="flex flex-wrap items-start justify-between gap-3 sm:gap-4">
@@ -543,47 +691,32 @@ function ComputerModels({
               })}
             </p>
           ) : null}
-          {summary?.totalBytes ? (
-            <>
-              <p className="mt-1.5 text-sm text-muted-foreground">
-                {t(summary.gpu ? m.gpuMemoryInUse : m.memoryInUse, {
-                  total: formatGigabytes(summary.totalBytes, t),
-                  used: formatGigabytes(summary.usedBytes, t),
-                })}
-              </p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {view?.observed_at
-                  ? t(m.memoryFreeChecked, {
-                      free: formatGigabytes(summary.freeBytes, t),
-                      time: relativeTime(view.observed_at, translation),
-                    })
-                  : t(m.memoryFree, {
-                      free: formatGigabytes(summary.freeBytes, t),
-                    })}
-              </p>
-            </>
-          ) : null}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {computerPicker}
-          {canRecheck ? (
-            <Button
-              loading={refresh.isPending}
-              onClick={recheckMemory}
-              size="compact"
-            >
-              {t(m.recheckMemory)}
-            </Button>
-          ) : null}
-          {view?.available ? (
-            <Button
-              onClick={() => setDialog({ kind: "advanced" })}
-              size="compact"
-            >
-              {t(m.details)}
-            </Button>
-          ) : null}
-        </div>
+        {computerPicker || showHeaderUtilities ? (
+          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+            {computerPicker}
+            {showHeaderUtilities && canRecheck ? (
+              <Button
+                loading={refresh.isPending}
+                onClick={recheckMemory}
+                size="compact"
+              >
+                {refresh.isPending ? null : (
+                  <Icon icon={RefreshIcon} size={14} />
+                )}
+                {t(m.recheckMemory)}
+              </Button>
+            ) : null}
+            {showHeaderUtilities ? (
+              <Button
+                onClick={() => setDialog({ kind: "advanced" })}
+                size="compact"
+              >
+                {t(m.details)}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </header>
 
       {status ? (
@@ -658,6 +791,16 @@ function ComputerModels({
         </>
       ) : view ? (
         <>
+          {view.available && summary?.totalBytes ? (
+            <MemorySummaryCard
+              canRecheck={canRecheck}
+              onDetails={() => setDialog({ kind: "advanced" })}
+              onRecheck={recheckMemory}
+              rechecking={refresh.isPending}
+              summary={summary}
+              view={view}
+            />
+          ) : null}
           {status && status.mode !== "local" ? (
             <SwitchToLocalNotice
               disabled={switching || offline}
@@ -718,9 +861,7 @@ function ComputerModels({
           {actionErrorCopy(queryErrorCode, t)}
         </EmptyState>
       ) : (
-        <p className="mt-6 text-sm text-muted-foreground" role="status">
-          {t(m.loadingModels)}
-        </p>
+        <ModelsLoadingSkeleton label={t(m.loadingModels)} />
       )}
     </>
   );
@@ -1353,15 +1494,22 @@ function Library({
           {debugCopy ? (
             <aside
               aria-label={t(m.debugBannerRegion)}
-              className="mt-6 flex flex-col items-start justify-between gap-3 rounded-xl border border-[var(--app-status-warning-border)] bg-[var(--app-status-warning-surface)] px-4 py-3 sm:flex-row"
+              className="mt-5 flex flex-col items-start justify-between gap-3 rounded-xl border border-[var(--app-status-warning-border)] bg-[var(--app-status-warning-surface)] px-4 py-3.5 sm:flex-row sm:items-center"
             >
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-app-warning">
-                  {debugCopy.title}
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {debugCopy.body}
-                </p>
+              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                <Icon
+                  className="mt-0.5 shrink-0 text-app-warning"
+                  icon={Alert02Icon}
+                  size={16}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-app-warning">
+                    {debugCopy.title}
+                  </p>
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    {debugCopy.body}
+                  </p>
+                </div>
               </div>
             </aside>
           ) : null}
@@ -1369,26 +1517,42 @@ function Library({
             <aside
               aria-label={t(m.hostBlockerRegion)}
               className={cn(
-                "mt-6 flex flex-col items-start justify-between gap-3 rounded-xl border px-4 py-3 sm:flex-row",
+                "mt-5 flex flex-col items-start justify-between gap-3 rounded-xl border px-4 py-3.5 sm:flex-row sm:items-center",
                 blocker.code === "GPU_UNSUPPORTED"
                   ? "border-border bg-muted/60"
                   : "border-[var(--app-status-warning-border)] bg-[var(--app-status-warning-surface)]",
               )}
             >
-              <div className="min-w-0 flex-1">
-                <p
+              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                <Icon
                   className={cn(
-                    "text-sm font-medium",
+                    "mt-0.5 shrink-0",
                     blocker.code === "GPU_UNSUPPORTED"
-                      ? "text-foreground"
+                      ? "text-muted-foreground"
                       : "text-app-warning",
                   )}
-                >
-                  {blockerCopy.title}
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {blockerCopy.body}
-                </p>
+                  icon={
+                    blocker.code === "GPU_UNSUPPORTED"
+                      ? InformationCircleIcon
+                      : Alert02Icon
+                  }
+                  size={16}
+                />
+                <div className="min-w-0 flex-1">
+                  <p
+                    className={cn(
+                      "text-sm font-medium",
+                      blocker.code === "GPU_UNSUPPORTED"
+                        ? "text-foreground"
+                        : "text-app-warning",
+                    )}
+                  >
+                    {blockerCopy.title}
+                  </p>
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    {blockerCopy.body}
+                  </p>
+                </div>
               </div>
               {blocker.code === "GPU_UNSUPPORTED" ? (
                 onSwitchToByok && !readOnly ? (
@@ -1416,15 +1580,22 @@ function Library({
           {guidanceCopy ? (
             <aside
               aria-label={t(m.memoryGuidance)}
-              className="mt-6 flex flex-col items-start justify-between gap-3 rounded-xl border border-[var(--app-status-warning-border)] bg-[var(--app-status-warning-surface)] px-4 py-3 sm:flex-row"
+              className="mt-5 flex flex-col items-start justify-between gap-3 rounded-xl border border-[var(--app-status-warning-border)] bg-[var(--app-status-warning-surface)] px-4 py-3.5 sm:flex-row sm:items-center"
             >
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-app-warning">
-                  {guidanceCopy.title}
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {guidanceCopy.body}
-                </p>
+              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                <Icon
+                  className="mt-0.5 shrink-0 text-app-warning"
+                  icon={Alert02Icon}
+                  size={16}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-app-warning">
+                    {guidanceCopy.title}
+                  </p>
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    {guidanceCopy.body}
+                  </p>
+                </div>
               </div>
               {readOnly ? null : (
                 <Button
@@ -1440,7 +1611,7 @@ function Library({
           ) : null}
           {entries.length === 0 ? (
             <>
-              <div className="mt-6">
+              <div className="mt-5">
                 <FeaturedModelSpotlight />
               </div>
               <EmptyState title={t(m.noModelsTitle)}>
@@ -1448,7 +1619,7 @@ function Library({
               </EmptyState>
             </>
           ) : (
-            <section aria-label={t(m.title)} className="mt-6 grid gap-2">
+            <section aria-label={t(m.title)} className="mt-5 grid gap-2.5">
               <FeaturedModelSpotlight>
                 {spotlightEntry ? renderModelRow(spotlightEntry, true) : null}
               </FeaturedModelSpotlight>

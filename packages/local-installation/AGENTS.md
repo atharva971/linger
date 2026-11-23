@@ -183,9 +183,10 @@ the `LINGER_LOCALMODELS_*` keys of the installer's instance runtime. Every
 `LOCALMODELS_BIFROST_ADDR` per installation home, stripping inherited values.
 The Bifrost address comes from `<tools>/owned.json` (`gateway.bifrost.addr`)
 when present, else `<home>/runtime/localmodels/bifrost-addr`, and on commands
-that may plan or start Bifrost defaults to `127.0.0.1:18480` when free or
-allocates and persists a free loopback port when `127.0.0.1:18480` is held by
-another process; stop and read-only calls never probe or allocate a port.
+that may plan or start Bifrost defaults to `127.0.0.1:18480` when free across
+loopback and local interfaces or allocates and persists an ephemeral port free
+across local interfaces when `18480` is held by another process; stop and
+read-only calls never probe or allocate a port.
 
 Setup sets the Computer's model source through `localmodels source apply`
 (`byok-source.ts`): BYOK after the Runtime is ready, a local model after the
@@ -218,8 +219,8 @@ after the desktop's quit stopped them, whenever the active model source is
 quit-time `library unload` reloads that saved model and re-applies the local
 source under the same lock (never guessing an arbitrary idle model when no
 `runtime_model` is saved), while a stopped plan gets the same restore (`stack up`,
-falling back to `stack apply`), verifies whether a saved
-`localmodels-library/` model is loaded, and sets the local source again. Library-model reload failures return a failure outcome that warm
+falling back to `stack apply`), verifies whether a saved local model
+(`localmodels/` or `localmodels-library/`) is loaded, and sets the local source again. Library-model reload failures return a failure outcome that warm
 and cold resume surface in `details.localModelsDegraded` so startup stays usable
 and the person can still reach the Models page. On cold resume, a saved `local`
 source preserves local mode and prepares its runtime instead of letting an older

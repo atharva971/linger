@@ -2275,11 +2275,13 @@ export interface components {
       author_type: string;
       message_kind: string;
       fired_routine: boolean;
+      /** @description A Human acted through this hidden Message, by answering a card or asking during a recording, and waits for the Agent's answer. */
+      human_waiting: boolean;
     };
     AgentRuntimeWorkState: {
       has_queued_runs: boolean;
       has_pending_work: boolean;
-      /** @description Distinct scheduling metadata of the oldest claimable Run's initial inputs. */
+      /** @description Distinct scheduling metadata of the initial inputs of every claimable queued Run. The Run claimed next serves them all, so it waits as the most urgent of them. */
       next_run_origins?: components["schemas"]["AgentRunInputOrigin"][];
       /** @description Present on the work-state read. Steers a Message transaction queued for this Context that the Agent Service has not settled, in input order: a targeted Message for the running Run that reads its Inbox, or a native question's answer assigned to the Run that asked it. */
       message_steers?: components["schemas"]["StoredAgentRuntimeInput"][];
@@ -2720,6 +2722,11 @@ export interface components {
       | "reasoning"
       | "coding"
       | "multilingual";
+    /**
+     * @description Inference engine family that runs this model entry. Never inferred from name or description.
+     * @enum {string}
+     */
+    LocalModelEngine: "llama.cpp" | "polystrata" | "strata";
     /** @description One validated chat model of the catalog on this platform and its state on this Computer. Sizes are bytes; readers format them. */
     LocalModel: {
       id: components["schemas"]["LocalModelId"];
@@ -2771,6 +2778,16 @@ export interface components {
       source_url?: string;
       /** @description Warm prompt-processing speed in tokens/s measured at the last load; absent when unknown. */
       prompt_tokens_per_second?: number;
+      engine?: components["schemas"]["LocalModelEngine"];
+      /** @description Display-only engine version and backend for this model, such as PolyStrata 0.2.19-poly.1 · CUDA. */
+      engine_label?: string;
+      /** @description Maximum concurrent request slots configured for this model when loaded. */
+      concurrency?: number;
+      /**
+       * Format: int64
+       * @description Additional host system RAM used alongside GPU VRAM for hybrid offload engines (such as PolyStrata); absent when all weights stay in the model's primary pool.
+       */
+      host_ram_bytes?: number;
     };
     /** @description Present only when localmodels debug mode (tiny or simulate) is active on the Computer. config_path is shown only to the Computer owner. */
     LocalModelsDebugInfo: {

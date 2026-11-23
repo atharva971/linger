@@ -50,7 +50,9 @@ A protocol probe passes once the Runtime answers the handshake, however the
 process exits after its input closes. When the handshake fails, the daemon log
 records `runner.runtime_probe.handshake_failed` with the exit status and the
 redacted end of stderr; the diagnostic sent to TeamHub stays categorical.
-It periodically refreshes authentication and unavailable Runtimes without a restart.
+It periodically refreshes authentication and unavailable Runtimes without a
+restart. The daemon pauses those refreshes in the `upgrade-required`,
+`authentication-failed`, and `identity-conflict` Gateway states.
 The Claude check also probes idle Context homes, because each one can hold its
 own refreshed login. It reconciles only the four most recently used homes and
 runs `claude auth status` once per distinct credential, so its cost does not
@@ -93,6 +95,24 @@ Claude uses the fixed `model-invoke/claude/.claude` under the state directory as
 next one. A model call does not enter the Operation ledger and takes no
 execution slot.
 
+A call that ends `failed` or `timed_out` is checked against the network its
+model needs (`internal/daemon/model_network.go`), and reported `unavailable`
+when this Computer cannot reach it, so the Agent side waits for the Computer as
+it does for a disconnected one instead of spending attempts. The endpoints come
+from the Runtime's own configuration (`internal/provider/model_endpoints.go`):
+the active Codex custom provider's `base_url`, else Codex's `chatgpt.com` and
+`api.openai.com` or the `chatgpt_base_url` and `openai_base_url` overriding
+them; Claude's `ANTHROPIC_BASE_URL`, else `api.anthropic.com`; for Pi, the base
+URL of the custom provider in `models.json` that its default model is on. The
+call is unavailable only when none of them, nor the proxy `HTTPS_PROXY`,
+`HTTP_PROXY` and `NO_PROXY` choose for each, accepts a TCP connection. A BYOK
+gateway, whose endpoint the tool probes when it mounts, and a Runtime whose
+endpoints are unknown, such as Pi on a built-in provider, need a route out of
+the machine, tested with UDP sockets connected to documentation addresses,
+which send nothing; local models need nothing. The check sends no data, waits
+at most 3 s per connection, and never runs for a call that completed or failed
+for another reason.
+
 Codex's workspace mode turns off the shell and unified exec and keeps only the
 code-mode host's `apply_patch`, with the working directory as the only writable
 root. It therefore reads no files, and the Daemon appends the workspace files'
@@ -114,12 +134,25 @@ tool: `python`, `module_directory` (the sealed kit, used as `PYTHONPATH` and
 working directory), `state_directory` (`LOCALMODELS_STATE`) and
 `base_directory` (`--base-dir`). From `state_directory`, the Daemon derives
 sibling `tools` (`LOCALMODELS_TOOLS_DIR`), `bifrost`
-(`LOCALMODELS_BIFROST_DIR`), and `bifrost-addr` (`LOCALMODELS_BIFROST_ADDR`,
-preferring `<tools>/owned.json`'s `gateway.bifrost.addr` and allocating a free
-loopback port on start/apply calls when `127.0.0.1:18480` is occupied) while
-stripping inherited `LOCALMODELS_*` overrides. `packages/local-installation`
-writes it for the CLI Computer and the Desktop app for its own; a Computer
-without it, or whose interpreter is gone, reports `available: false` with
+(`LOCALMODELS_BIFROST_DIR`), and `bifrost-addr` (`LOCALMODELS_BIFROST_ADDR`).
+The Daemon prefers the address in `<tools>/owned.json`. On start and apply
+calls, it checks port availability on loopback and local interfaces before
+choosing an unowned address. The default address is `127.0.0.1:18480`.
+Gateway registration failures can rotate the unowned address for the next
+attempt.
+
+The Daemon clears inherited values for these `LOCALMODELS_*` variables before
+setting them on tool calls. If the home lacks a per-home Bifrost ownership
+record, the Daemon can locate a legacy gateway through the profile in
+`model-source.json` in local mode or the platform's default legacy tools directory.
+It checks the legacy ownership record, any local-mode gateway URL, and the
+Bifrost configuration for a provider registered by a loaded library model.
+While that verification succeeds, the tool uses the legacy gateway and
+local-mode Runtime discovery prefers its existing `gateway-home` Pi profile.
+
+`packages/local-installation` writes the `local_models` config for the CLI
+Computer. The Desktop app writes it for its own Computer. A Computer without
+this config, or whose interpreter is gone, reports `available: false` with
 `TOOL_NOT_INSTALLED`. `internal/localmodels` owns the tool calls; the Daemon
 only routes `execute` (kind `local_models`) to it and sends what it publishes.
 The Daemon executes the actions the Computer owner chose; it never picks a
@@ -172,7 +205,12 @@ model.
   `RUNTIME_DEPENDENCY_MISSING`, `UNAVAILABLE`, `UNKNOWN_ERROR`, `memory_kind`,
   driver/runtime fields) and optional `debug` metadata are sent only when
   `runner.welcome`'s `service_features` names `local_models_diagnostics` and
-  are downgraded otherwise. It is sent after
+  are downgraded otherwise. Per-model inference engine fields (`engine`,
+  `engine_label`, `concurrency`, `host_ram_bytes`) are sanitized forward-
+  compatibly (unknown `engine` or out-of-range `concurrency` is omitted,
+  `engine_label` is clipped) and sent only when `runner.welcome`'s
+  `service_features` names `local_models_engine` (Computer 0.61.0 or later).
+  The snapshot is sent after
   every welcome, after every action or job end, and at most every 2 seconds
   for progress. When a job enters the `download` phase, the Daemon publishes
   that progress line onto the current snapshot right away so refreshes do not
@@ -194,15 +232,15 @@ model.
   exists (`byok`, `subscription`, or `local`), it isolates tool calls through
   the shared `localGatewayPiProfile` resolver (matching `OverlayEnvironment`
   for `local` mode): passing an existing managed `gateway-home/.pi/agent`
-  profile (preferring `ToolsDirectory(stateDir)` over legacy `stateDir` and an
-  explicitly configured legacy `gateway-home`), and omitting
+  profile (the verified legacy profile while models are loaded on that
+  gateway, then `ToolsDirectory(stateDir)`, `stateDir`, and an explicitly
+  configured legacy `gateway-home`), and omitting
   `PI_CODING_AGENT_DIR` otherwise so `localmodels` registers models into this
   home's `tools/gateway-home/.pi/agent` without colliding with `byok-home` or
-  personal `~/.pi/agent`. When no `model-source.json` exists yet, tool calls
-  follow `workspace.PiSourceEnvironment` on the base environment (excluding any
-  stale `byok-home`) so loaded models land in the same profile Runtime
-  discovery reads. When a model is loaded on a
-  Computer with Pi enabled and not yet installed, `internal/localmodels`
+  personal `~/.pi/agent`. Without an applicable legacy profile or
+  `model-source.json`, tool calls follow `workspace.PiSourceEnvironment`
+  on the base environment (excluding any stale `byok-home`). When a model is
+  loaded on a Computer with Pi enabled and not yet installed, `internal/localmodels`
   installs the pinned Pi runtime asynchronously in the background under
   `HarnessRoot` (passing the bundled Node binary via `--node` when available,
   matching the installer's 2 m status/plan and 20 m apply budgets, and backing
@@ -250,8 +288,9 @@ first. A failed mount fails the Run before its Runtime starts, with the
 public failure code of the tool's structured code: `BYOK_UNREACHABLE` and
 `NETWORK_UNAVAILABLE` become `network_error`, `BYOK_AUTH_FAILED`
 `authentication_required`; any other stays `execution_failed`. Model calls
-answer `auth_required` or `runtime_unavailable` with the tool's code in the
-reason. Runs that waited for a remount that failed meanwhile share its
+answer `unavailable` for the two network codes, `auth_required` for
+`BYOK_AUTH_FAILED` and `runtime_unavailable` for any other, with the tool's
+code in the reason. Runs that waited for a remount that failed meanwhile share its
 error instead of probing the endpoint again.
 
 ## Codex models cache

@@ -35,7 +35,9 @@ export type PositiveInteger = number;
 export type ServiceFeature =
   | "local_models"
   | "byok_endpoint"
-  | "local_models_diagnostics";
+  | "local_models_diagnostics"
+  | "model_invoke_outcomes"
+  | "local_models_engine";
 export type JsonValue =
   | null
   | boolean
@@ -1461,6 +1463,22 @@ export interface LocalModel {
    * Warm prompt-processing speed in tokens/s measured at the last load; absent when unknown.
    */
   prompt_tokens_per_second?: number;
+  /**
+   * Inference engine family for this model. Sent only when runner.welcome service_features names local_models_engine.
+   */
+  engine?: "llama.cpp" | "polystrata" | "strata";
+  /**
+   * Display-only engine version and backend for this model. Sent only when runner.welcome service_features names local_models_engine.
+   */
+  engine_label?: string;
+  /**
+   * Maximum concurrent request slots for this model when loaded. Sent only when runner.welcome service_features names local_models_engine.
+   */
+  concurrency?: number;
+  /**
+   * Additional host system RAM used alongside GPU VRAM for hybrid offload engines. Sent only when runner.welcome service_features names local_models_engine.
+   */
+  host_ram_bytes?: number;
 }
 export interface LocalModelAvailability {
   downloadable: boolean;
@@ -2172,6 +2190,9 @@ export interface ModelInvoked {
   command_id: Id;
   runner_id: Id;
   invoke_id: Id;
+  /**
+   * context_too_long and unsupported are sent only after a runner.welcome whose service_features names model_invoke_outcomes; otherwise the Daemon downgrades them to failed and runtime_unavailable.
+   */
   outcome:
     | "completed"
     | "timed_out"
@@ -2181,6 +2202,8 @@ export interface ModelInvoked {
     | "runtime_unavailable"
     | "auth_required"
     | "runtime_incompatible"
+    | "context_too_long"
+    | "unsupported"
     | "failed";
   /**
    * The reply of a completed call. For a session call that timed_out, was output_limited or canceled, what the model had streamed so far, when anything.

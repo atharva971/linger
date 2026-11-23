@@ -161,6 +161,16 @@ take precedence.
   an older Computer rejects unknown `ServiceFeature` values and closes the
   connection; a Daemon talking to an older Agent Service downgrades those
   snapshot and refusal fields to legacy values.
+- Extended `executed` `model_invoke` outcomes (`context_too_long` and
+  `unsupported`, gated by `model_invoke_outcomes` in `runner.welcome`'s
+  `service_features`) are advertised only to Computer 0.60.0 or later
+  (`FIRST_MODEL_INVOKE_OUTCOMES_COMPUTER_VERSION`); otherwise a Daemon
+  downgrades them to `failed` and `runtime_unavailable`.
+- Per-model local inference engine metadata (`local_models_engine` in
+  `runner.welcome`'s `service_features`) is advertised only to Computer 0.61.0
+  or later (`FIRST_LOCAL_MODELS_ENGINE_COMPUTER_VERSION`); a Daemon talking to
+  an older Agent Service strips `engine`, `engine_label`, `concurrency`, and
+  `host_ram_bytes` from `LocalModel` rows.
 - Default unit, integration, and fixture smoke tests use deterministic adapters
   and do not call a live model provider. Explicitly named live suites such as
   `smoke:local-runner:live` may use an authenticated provider and must remain

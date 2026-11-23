@@ -50,7 +50,9 @@ info:
     one session in one resident thread; the result is the same either way.
     cancel with target model_invoke stops one running call so the scheduler
     can swap it out; the call's executed model_invoke still follows. The
-    service sends it only to a Computer release that decodes it.
+    service sends it only to a Computer release that decodes it. Extended
+    model_invoke outcomes (context_too_long and unsupported) travel only after
+    a runner.welcome whose service_features names model_invoke_outcomes.
     execute with kind
     computer_tool runs native browser actions, retained Task output reads,
     and Feishu Mail calls through the owner's own lark-cli login, limited to
@@ -70,6 +72,9 @@ info:
     seconds while a download or load runs. Extended diagnostic reasons,
     refusal codes, and optional debug-mode metadata travel only after a
     runner.welcome whose service_features names local_models_diagnostics.
+    Per-model inference engine fields (engine, engine_label, concurrency,
+    host_ram_bytes) travel only after a runner.welcome whose service_features
+    names local_models_engine, advertised to Computer 0.61.0 and later.
     execute with kind model_source reads or switches the Computer's model
     source. A BYOK input names its address as base_url, path and endpoint
     with an explicit protocol, and the Computer sends one request there; the

@@ -24,6 +24,9 @@ import {
 } from "./local-model-agents";
 import {
   capabilityCopy,
+  concurrencyCopy,
+  engineBadgeCopy,
+  engineHintCopy,
   modelErrorCopy,
   modelNoteCopy,
   unavailableCopy,
@@ -74,7 +77,9 @@ function Fact({
         className,
       )}
     >
-      <span className="w-28 shrink-0 text-muted-foreground">{label}</span>
+      <span className="w-28 shrink-0 text-xs font-medium text-muted-foreground">
+        {label}
+      </span>
       <span className="min-w-0 flex-1 tabular-nums text-foreground">
         {children}
       </span>
@@ -114,12 +119,16 @@ function CopyEndpoint({ endpoint, name }: { endpoint: string; name: string }) {
   }
 
   return (
-    <span className="flex items-center gap-1">
-      <code className="min-w-0 truncate font-mono text-xs" ref={codeRef}>
+    <span className="flex items-center gap-1.5">
+      <code
+        className="min-w-0 truncate rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground"
+        ref={codeRef}
+      >
         {endpoint}
       </code>
       <Button
         aria-label={t(copied ? m.copiedEndpointOf : m.copyEndpointOf, { name })}
+        className={copied ? "text-app-success" : undefined}
         onClick={copy}
         size="compactIcon"
         title={t(copied ? commonMessages.copied : m.copyEndpoint)}
@@ -159,7 +168,15 @@ function gatewayFactValue(
   }
   if (piRuntime.status === "ready") {
     if (piRuntime.models.some((item) => item.id === entry.model.pi_model)) {
-      return t(m.gatewayReady);
+      return (
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 rounded-full bg-app-success"
+          />
+          <span>{t(m.gatewayReady)}</span>
+        </span>
+      );
     }
     return (
       <span className="text-muted-foreground">{t(m.gatewayRegistering)}</span>
@@ -212,6 +229,13 @@ export function ModelFacts({
       : undefined;
   const capabilities = modelCapabilities(model);
   const parameters = parametersLabel(model, t);
+  const engineDisplay = model.engine_label ?? engineBadgeCopy(model.engine);
+  const engineHint = engineHintCopy(model.engine, model.fit, t);
+  const concurrency = concurrencyCopy(model.concurrency, t);
+  const hostRam =
+    model.host_ram_bytes && model.host_ram_bytes > 0
+      ? formatGigabytes(model.host_ram_bytes, t)
+      : undefined;
   const speed = speedLabel(model, t);
   const sourceUrl = safeModelSourceUrl(model.source_url);
   const reclaimable = memoryReclaimable(view, model);
@@ -302,13 +326,13 @@ export function ModelFacts({
           </FormFeedback>
         </div>
       ) : null}
-      <div className="mt-1 grid grid-cols-1 gap-x-6 @xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-x-6 @xl:grid-cols-2">
         {capabilities.length ? (
           <Fact className="@xl:col-span-2" label={t(m.factCapabilities)}>
             <span className="flex flex-wrap gap-1.5">
               {capabilities.map((capability) => (
                 <span
-                  className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-secondary-foreground"
+                  className="inline-flex h-[22px] items-center rounded-sm bg-muted px-2 text-xs font-medium text-secondary-foreground"
                   key={capability}
                 >
                   {capabilityCopy(capability, t)}
@@ -323,11 +347,25 @@ export function ModelFacts({
         {parameters ? (
           <Fact label={t(m.factParameters)}>{parameters}</Fact>
         ) : null}
+        {engineDisplay ? (
+          <Fact label={t(m.factEngine)}>
+            <span className="block">{engineDisplay}</span>
+            {engineHint ? (
+              <span className="block text-xs text-muted-foreground">
+                {engineHint}
+              </span>
+            ) : null}
+          </Fact>
+        ) : null}
+        {concurrency ? (
+          <Fact label={t(m.factConcurrency)}>{concurrency}</Fact>
+        ) : null}
         <Fact label={t(m.factMemory)}>
           {memoryPlace
             ? t(m.memoryOn, { place: memoryPlace, size: memorySize })
             : memorySize}
         </Fact>
+        {hostRam ? <Fact label={t(m.factSystemMemory)}>{hostRam}</Fact> : null}
         <Fact label={t(onComputer ? m.factOnDisk : m.factDownload)}>
           {formatGigabytes(model.download_bytes, t)}
         </Fact>
@@ -335,7 +373,7 @@ export function ModelFacts({
           {contextLabel(model.context_tokens, t)}
         </Fact>
         <Fact label={t(m.factVersion)}>
-          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-secondary-foreground">
+          <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs text-secondary-foreground">
             {model.quant}
           </code>
         </Fact>
@@ -395,7 +433,7 @@ export function ModelFacts({
         {sourceUrl ? (
           <Fact className="@xl:col-span-2" label={t(m.factSource)}>
             <a
-              className="inline-flex max-w-full items-center gap-1 text-foreground underline underline-offset-2"
+              className="inline-flex max-w-full items-center gap-1 text-app-link underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               href={sourceUrl}
               rel="noopener noreferrer"
               target="_blank"
@@ -440,8 +478,8 @@ function PoolBar({
   const width = (bytes: number) =>
     `${pool.total_bytes ? Math.min(100, (bytes / pool.total_bytes) * 100) : 0}%`;
   return (
-    <div className="flex min-h-10 items-center gap-3 py-1.5 text-sm">
-      <span className="w-28 shrink-0 text-muted-foreground">
+    <div className="flex min-h-10 items-center gap-3 py-2 text-sm">
+      <span className="w-28 shrink-0 text-xs font-medium text-muted-foreground">
         {pool.kind === "gpu"
           ? t(m.gpuIndex, { index: String(pool.gpu_index) })
           : label}
@@ -452,7 +490,7 @@ function PoolBar({
           total: formatGigabytes(pool.total_bytes, t),
           used: formatGigabytes(pool.used_bytes, t),
         })}
-        className="flex h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted"
+        className="flex h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-muted"
         role="img"
       >
         {pool.holders
@@ -528,13 +566,13 @@ export function AdvancedDialog({
       size="md"
       title={t(m.detailsOf, { name: view.computer.display_name })}
     >
-      <div className="px-5 py-4">
+      <div className="space-y-5 px-5 py-4">
         {view.pools.length ? (
-          <>
-            <h3 className="mb-1 text-sm font-medium text-muted-foreground">
+          <section>
+            <h3 className="mb-2 text-xs font-medium text-muted-foreground">
               {t(m.factMemory)}
             </h3>
-            <div className="divide-y divide-border">
+            <div className="divide-y divide-border rounded-xl border border-border bg-app-canvas/40 px-3.5">
               {view.pools.map((pool) => (
                 <PoolBar
                   colorOf={colorOf}
@@ -545,7 +583,7 @@ export function AdvancedDialog({
               ))}
             </div>
             {seenHolderIds.size > 0 || hasOtherApps ? (
-              <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <p className="mt-2.5 flex flex-wrap gap-x-3.5 gap-y-1 px-0.5 text-xs text-muted-foreground">
                 {[...models, ...components].map((holder) => (
                   <span className="flex items-center gap-1.5" key={holder.id}>
                     <span
@@ -569,19 +607,14 @@ export function AdvancedDialog({
                 ) : null}
               </p>
             ) : null}
-          </>
+          </section>
         ) : null}
         {host ? (
-          <>
-            <h3
-              className={cn(
-                "mb-1 text-sm font-medium text-muted-foreground",
-                view.pools.length > 0 && "mt-5",
-              )}
-            >
+          <section>
+            <h3 className="mb-2 text-xs font-medium text-muted-foreground">
               {t(m.hardware)}
             </h3>
-            <div>
+            <div className="rounded-xl border border-border bg-app-canvas/40 px-3.5">
               <Fact bordered={false} label={t(m.factMemory)}>
                 {formatGigabytes(host.ram_total_bytes, t)}
               </Fact>
@@ -597,7 +630,7 @@ export function AdvancedDialog({
                 {formatGigabytes(host.disk_free_bytes, t)}
               </Fact>
             </div>
-          </>
+          </section>
         ) : null}
       </div>
     </ModalDialog>

@@ -17,6 +17,7 @@ import { isInkling2MiniModelId } from "@linger/service-kit/featured-models";
 import { useId, type MouseEvent } from "react";
 import { Link } from "react-router";
 
+import { AutoHeight } from "@/components/ui/auto-height";
 import { Button, buttonClassName } from "@/components/ui/button";
 import { Icon, type IconSvgElement } from "@/components/ui/icon";
 import type { TeamHubLocalComputerPage } from "@/features/teamhub/teamhub-types";
@@ -32,7 +33,11 @@ import {
   usedByAgentNames,
 } from "./local-model-agents";
 import { ModelFacts } from "./local-model-details";
-import { modelErrorShortCopy, unavailableShortCopy } from "./local-models-copy";
+import {
+  engineBadgeCopy,
+  modelErrorShortCopy,
+  unavailableShortCopy,
+} from "./local-models-copy";
 import { localModelsMessages as m } from "./local-models.messages";
 import type {
   LocalModel,
@@ -98,35 +103,18 @@ function modelBrand(model: LocalModel): FamilyBrand {
 
 function cardTone(
   status: ModelStatus,
-  recommended: boolean,
-  featured: boolean,
+  inSpotlight: boolean,
   expanded: boolean,
 ): string {
-  if (status === "loaded") {
+  if (inSpotlight) {
     return cn(
-      "bg-card shadow-sm",
-      expanded
-        ? "border-app-success/45"
-        : "border-[var(--app-status-success-border)] hover:border-app-success/45",
-    );
-  }
-  if (recommended) {
-    return cn(
-      "bg-[var(--app-card-info-surface)]",
-      expanded
-        ? "border-app-info/45"
-        : "border-[var(--app-card-info-border)] hover:border-app-info/45",
-    );
-  }
-  if (status === "downloading" || status === "loading") {
-    return cn(
-      "bg-card",
-      expanded ? "border-app-info/45" : "border-[var(--app-card-info-border)]",
+      "rounded-none border-0 bg-card",
+      !expanded && "hover:bg-muted/35",
     );
   }
   if (status === "failed") {
     return cn(
-      "bg-card",
+      "rounded-xl border bg-card",
       expanded
         ? "border-app-danger/45"
         : "border-[var(--app-status-danger-border)] hover:border-app-danger/45",
@@ -134,21 +122,15 @@ function cardTone(
   }
   if (status === "unavailable") {
     return cn(
-      "bg-muted/35",
+      "rounded-xl border bg-muted/40",
       expanded ? "border-border-hover" : "border-border/70 hover:bg-muted/55",
     );
   }
-  if (featured) {
-    return cn(
-      "bg-card",
-      expanded
-        ? "border-app-info/45"
-        : "border-[var(--app-card-info-border)] hover:border-app-info/45",
-    );
-  }
   return cn(
-    "bg-card",
-    expanded ? "border-border-hover" : "border-border hover:bg-accent/40",
+    "rounded-xl border bg-card",
+    expanded
+      ? "border-border-hover"
+      : "border-border hover:border-border-hover hover:bg-muted/30",
   );
 }
 
@@ -247,7 +229,7 @@ function RowStatusLine({
       ) : null}
       <span
         className={cn(
-          "truncate tabular-nums",
+          "min-w-0 tabular-nums @md:truncate",
           tag.working && "town-shimmer-text",
         )}
       >
@@ -290,6 +272,9 @@ function RowStatusLine({
 
 function RowMetadataPills({
   badges,
+  engine,
+  engineBadge,
+  engineTitle,
   featured,
   overflowTitle,
   status,
@@ -297,6 +282,9 @@ function RowMetadataPills({
   usedByTitle,
 }: {
   badges: string[];
+  engine?: LocalModel["engine"];
+  engineBadge?: string;
+  engineTitle?: string;
   featured: boolean;
   overflowTitle?: string;
   status: ModelStatus;
@@ -304,6 +292,7 @@ function RowMetadataPills({
   usedByTitle?: string;
 }) {
   const t = useT();
+  const isAcceleratedEngine = engine === "polystrata" || engine === "strata";
   return (
     <div
       className={cn(
@@ -312,26 +301,46 @@ function RowMetadataPills({
       )}
     >
       {featured ? (
-        <span className="rounded-full bg-[var(--app-mention-surface)] px-2 py-0.5 text-xs font-medium text-app-info">
+        <span className="inline-flex h-[22px] items-center rounded-sm bg-[var(--app-mention-surface)] px-2 text-xs font-medium text-app-info">
           {t(m.featured)}
         </span>
       ) : null}
       {usedBy ? (
         <span
           className={cn(
-            "rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
+            "inline-flex h-[22px] items-center gap-1.5 rounded-sm px-2 text-xs font-medium tabular-nums",
             status === "loaded"
               ? "bg-[var(--app-status-success-surface)] text-app-success"
               : "bg-muted text-secondary-foreground",
           )}
           title={usedByTitle}
         >
+          {status === "loaded" ? (
+            <span
+              aria-hidden
+              className="size-1.5 shrink-0 rounded-full bg-app-success"
+            />
+          ) : null}
           {usedBy}
+        </span>
+      ) : null}
+      {engineBadge ? (
+        <span
+          className={cn(
+            "inline-flex h-[22px] items-center rounded-sm px-2 text-xs font-medium",
+            isAcceleratedEngine
+              ? "bg-lavender-500/15 text-lavender-700"
+              : "border border-border bg-card text-secondary-foreground",
+          )}
+          data-engine={engine}
+          title={engineTitle}
+        >
+          {engineBadge}
         </span>
       ) : null}
       {badges.map((badge, index) => (
         <span
-          className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+          className="inline-flex h-[22px] items-center rounded-sm bg-muted px-2 text-xs text-muted-foreground"
           key={badge}
           title={index === badges.length - 1 ? overflowTitle : undefined}
         >
@@ -461,8 +470,14 @@ export function ModelRow({
     Boolean(model.pi_model) &&
     Boolean(primaryAgent) &&
     Boolean(onAssignAgent);
+  const engineBadge = engineBadgeCopy(model.engine);
+  const engineTitle = model.engine_label ?? engineBadge;
   const { badges, overflowTitle } = collapsedRowBadges(model, t);
-  const hasMeta = showFeaturedPill || Boolean(usedBy) || badges.length > 0;
+  const hasMeta =
+    showFeaturedPill ||
+    Boolean(usedBy) ||
+    Boolean(engineBadge) ||
+    badges.length > 0;
   const damagedFiles =
     status === "failed" &&
     (model.error?.code === "CHECKSUM_MISMATCH" ||
@@ -544,8 +559,8 @@ export function ModelRow({
   return (
     <article
       className={cn(
-        "@container rounded-xl border transition-[background-color,border-color,box-shadow] duration-150 motion-reduce:transition-none",
-        cardTone(status, recommended, featured, expanded),
+        "@container overflow-hidden transition-[background-color,border-color] duration-150 motion-reduce:transition-none",
+        cardTone(status, inSpotlight, expanded),
       )}
       data-featured={featured || undefined}
       data-recommended={recommended || undefined}
@@ -553,7 +568,7 @@ export function ModelRow({
     >
       <div
         className={cn(
-          "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-2 px-4 py-3",
+          "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-4 py-3",
           hasMeta && "@2xl:grid-cols-[minmax(0,1fr)_auto_auto]",
         )}
       >
@@ -595,6 +610,9 @@ export function ModelRow({
         {hasMeta ? (
           <RowMetadataPills
             badges={badges}
+            engine={model.engine}
+            engineBadge={engineBadge}
+            engineTitle={engineTitle}
             featured={showFeaturedPill}
             overflowTitle={overflowTitle}
             status={status}
@@ -604,7 +622,7 @@ export function ModelRow({
         ) : null}
         <div
           className={cn(
-            "col-span-2 flex flex-wrap items-center justify-end gap-1.5 pl-13 @md:col-span-1 @md:col-start-2 @md:row-start-1 @md:flex-nowrap @md:pl-0",
+            "col-span-2 mt-0.5 flex flex-wrap items-center justify-end gap-1.5 border-t border-border/60 pt-2.5 @md:col-span-1 @md:col-start-2 @md:row-start-1 @md:mt-0 @md:flex-nowrap @md:border-t-0 @md:pt-0",
             hasMeta ? "row-start-3 @2xl:col-start-3" : "row-start-2",
           )}
         >
@@ -702,56 +720,58 @@ export function ModelRow({
         <DownloadProgress model={model} progress={progress} />
       ) : null}
       {expanded ? (
-        <div
-          className="border-t border-border px-4 pt-1 pb-3"
-          id={panelId}
-          role="region"
-          aria-label={t(m.detailsOf, { name: model.name })}
-        >
-          {model.description ? (
-            <p className="pt-2 pb-1 text-sm text-muted-foreground">
-              {model.description}
-            </p>
-          ) : null}
-          <ModelFacts
-            assignableAgents={assignableAgents}
-            assigningAgentId={assigningAgentId}
-            computer={computer}
-            disabled={disabled}
-            entry={entry}
-            hasPrimaryAssignAction={showsPrimaryAssignButton}
-            onAssignAgent={onAssignAgent}
-            view={view}
-          />
-          {removable || stopped ? (
-            <div className="mt-2 border-t border-border/70 pt-2.5">
-              {removable ? (
-                <Button
-                  data-voice-risk="never"
-                  disabled={disabled}
-                  loading={requested === "remove"}
-                  onClick={handlers.onRemove}
-                  size="compact"
-                  tone="danger"
-                >
-                  {t(m.removeFromComputer)}
-                </Button>
-              ) : null}
-              {stopped ? (
-                <Button
-                  data-voice-risk="never"
-                  disabled={disabled}
-                  loading={requested === "cancel"}
-                  onClick={handlers.onCancel}
-                  size="compact"
-                  tone="danger"
-                >
-                  {t(m.discardDownload)}
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <AutoHeight appear>
+          <div
+            aria-label={t(m.detailsOf, { name: model.name })}
+            className="border-t border-border bg-app-canvas/60 px-4 pt-3 pb-3.5"
+            id={panelId}
+            role="region"
+          >
+            {model.description ? (
+              <p className="pb-2.5 text-sm text-muted-foreground">
+                {model.description}
+              </p>
+            ) : null}
+            <ModelFacts
+              assignableAgents={assignableAgents}
+              assigningAgentId={assigningAgentId}
+              computer={computer}
+              disabled={disabled}
+              entry={entry}
+              hasPrimaryAssignAction={showsPrimaryAssignButton}
+              onAssignAgent={onAssignAgent}
+              view={view}
+            />
+            {removable || stopped ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/70 pt-3">
+                {removable ? (
+                  <Button
+                    data-voice-risk="never"
+                    disabled={disabled}
+                    loading={requested === "remove"}
+                    onClick={handlers.onRemove}
+                    size="compact"
+                    tone="danger"
+                  >
+                    {t(m.removeFromComputer)}
+                  </Button>
+                ) : null}
+                {stopped ? (
+                  <Button
+                    data-voice-risk="never"
+                    disabled={disabled}
+                    loading={requested === "cancel"}
+                    onClick={handlers.onCancel}
+                    size="compact"
+                    tone="danger"
+                  >
+                    {t(m.discardDownload)}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </AutoHeight>
       ) : null}
     </article>
   );
