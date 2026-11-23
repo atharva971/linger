@@ -22,7 +22,9 @@ one that inherits Modify for Authenticated Users does not. The Daemon's
 `privatefs` treats the volume root the same way. A refusal leaves the
 installer as its code and reason (`windowsPrivateRefusal`), never as its
 words: in the `startFailure` line on stdout when the installer manager cannot
-start, and in the `--user-keys` outcome. The Desktop setup page branches on
+start, in the `--user-keys` outcome, and in the `--inspect` failure outcome
+(`inspectSetup` propagates the `WINDOWS_PRIVATE_PATH_UNSAFE` refusal instead of
+wrapping it as `LOCALMODELS_SETUP_UNAVAILABLE`). The Desktop setup page branches on
 `UNSAFE_PARENT_ACCESS` to say where to install instead. Repair skips propagation when the protected
 DACL already grants inheritable FullControl to the owner and SYSTEM on a
 directory, or FullControl to both on a file. Private paths with partial rights
