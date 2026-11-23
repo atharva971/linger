@@ -555,8 +555,7 @@ function mailBindings(app: string, action: Action, input: Json): string[] {
         : ["OUTLOOK_GET_MESSAGE"]),
       "OUTLOOK_LIST_OUTLOOK_ATTACHMENTS",
     ];
-  if (action === "list")
-    return [input.query ? "OUTLOOK_LIST_MESSAGES" : "OUTLOOK_QUERY_EMAILS"];
+  if (action === "list") return [outlookListTool(input)];
   if (action === "send")
     return [input.draftId ? "OUTLOOK_SEND_DRAFT" : "OUTLOOK_SEND_EMAIL"];
   if (action === "draft")
@@ -575,6 +574,13 @@ function mailBindings(app: string, action: Action, input: Json): string[] {
   return ["OUTLOOK_MOVE_MESSAGE"];
 }
 
+// OUTLOOK_QUERY_EMAILS reads exactly one folder, so search and the whole
+// mailbox ("allfolders") go through OUTLOOK_LIST_MESSAGES.
+function outlookListTool(input: Json): string {
+  return input.query || input.folder === "all"
+    ? "OUTLOOK_LIST_MESSAGES"
+    : "OUTLOOK_QUERY_EMAILS";
+}
 async function executeMail(
   app: string,
   action: Action,
@@ -833,8 +839,9 @@ async function listMail(
       state.token,
     );
   } else {
+    const tool = outlookListTool(input);
     raw = await runtime.call(
-      input.query ? "OUTLOOK_LIST_MESSAGES" : "OUTLOOK_QUERY_EMAILS",
+      tool,
       optionalFields({
         top: input.limit,
         folder:
@@ -846,9 +853,13 @@ async function listMail(
         filter: input.unreadOnly
           ? "receivedDateTime ge 0001-01-01T00:00:00Z and isRead eq false"
           : undefined,
-        // OUTLOOK_QUERY_EMAILS types orderby as one string; search results
-        // from OUTLOOK_LIST_MESSAGES cannot be reordered.
-        orderby: input.query ? [] : "receivedDateTime desc",
+        // OUTLOOK_QUERY_EMAILS types orderby as one string and
+        // OUTLOOK_LIST_MESSAGES as a list; search results cannot be reordered.
+        orderby: input.query
+          ? []
+          : tool === "OUTLOOK_QUERY_EMAILS"
+            ? "receivedDateTime desc"
+            : ["receivedDateTime desc"],
         search: input.query,
         page_token: state.token,
       }),
