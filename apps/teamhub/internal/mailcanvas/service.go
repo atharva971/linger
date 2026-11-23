@@ -295,8 +295,7 @@ func draftGone(err error) bool {
 	if status, ok := composio.ErrorStatus(err); ok && status == http.StatusNotFound {
 		return true
 	}
-	status, ok := feishu.ErrorStatus(err)
-	return ok && status == http.StatusNotFound
+	return feishu.IsNotFound(err)
 }
 
 type deliveryArgs struct {

@@ -64,20 +64,6 @@ components:
           description: Whether this deployment has an external connection provider. When false, every app is unavailable until an operator configures the provider credential.
         provider_key:
           $ref: "#/components/schemas/ExternalProviderKeyStatus"
-    CompleteFeishuAuthorizationRequest:
-      type: object
-      additionalProperties: false
-      required: [state, code]
-      properties:
-        state:
-          type: string
-          minLength: 1
-          maxLength: 2048
-          description: The state Feishu returned to the redirect page, as TeamHub issued it.
-        code:
-          type: string
-          minLength: 1
-          maxLength: 1024
     ExternalProviderKeyStatus:
       type: object
       additionalProperties: false

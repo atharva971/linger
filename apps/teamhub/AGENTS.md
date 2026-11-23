@@ -24,35 +24,39 @@ Go service owning Human HTTP/SSE, Agent callbacks, and active product state.
 - Connector authorization defaults to the public Web callback. For a desktop
   request, pass only a validated one-time loopback address to Composio.
   TeamHub verifies connection status independently under the signed-in Account.
-- Feishu Mail is the one connected app TeamHub authorizes itself
+- Feishu Mail is the one connected app TeamHub runs itself
   (`internal/feishu`, `externalsource/feishu.go`): Composio has no Feishu
-  toolkit, and Feishu serves mail to enterprise custom apps only. The
-  deployment's custom app comes from `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and
-  `FEISHU_APP_REGION`, and needs `TEAMHUB_SECRET_ENCRYPTION_KEY` to seal user
-  tokens. The Apps page does not offer Feishu Mail: an Agent asked about it
-  resolves the account like any connector, and TeamHub posts the chat's
-  `connection_auth` card, whose Connect starts Feishu's consent; a connected
-  account stays manageable under Connected only. Consent returns to the Web
-  `/oauth/feishu-complete` page, which posts the code and TeamHub's signed state
-  to a session-less endpoint; the PKCE verifier stored with the upstream binds
-  the code to it, so the user may consent in a browser not signed in to Linger,
-  such as the system browser the desktop opens; the desktop learns the result
-  from the connection change TeamHub publishes. The redirect URL derives from
-  `WEB_PUBLIC_ORIGIN`, so each deployment address, including each local
-  installation's port, needs its own entry on the app's redirect allowlist.
-  The app's console also needs refreshing user access tokens turned on and the
-  scopes `feishu.RequestedScopes` names enabled as user permissions.
-  Tokens stay sealed in `feishu_upstream_tokens`. Feishu accepts each refresh
-  token once, so refreshes of one upstream run under an advisory lock and
-  replace both tokens only if no other refresh did; the six-hourly reconcile
-  renews a refresh token two days before it expires. Its Agent tools
-  (`FEISHU_MAIL_*`) run in `externalsource/feishu_mail_tools.go` behind
+  toolkit. Every call runs through the owner's own lark-cli on the online
+  Computer that runs their active Another Me
+  (`store.GetFeishuMailComputerTarget`): TeamHub sends a `feishu_mail` Computer
+  tool call through Node Services (`roomagent.CallLocalComputerToolResult`),
+  and the Daemon runs lark-cli against the owner's mailbox API paths only.
+  TeamHub keeps no Feishu credentials and needs no Feishu app of its own; the
+  Feishu app behind lark-cli must enable the mail scopes the Daemon's
+  `localtools.FeishuMailScopes` names. The Apps page never shows Feishu Mail,
+  not even under Connected: a person shares it by asking their Another Me, whose
+  `teamhub apps connect feishu_mail` posts the chat's `connection_auth` card,
+  and the account then shows among Another Me's connectors. Connect checks the
+  owner's lark-cli: one already logged in with every mail scope needs no page,
+  and otherwise the Computer starts a device login named after the upstream and
+  keeps its device code, whose Feishu page is the connect URL. The connection's
+  pending checks wait on that login, then read the mailbox address as its
+  identity. Without an online Computer, lark-cli, or a scope the app enables,
+  connecting answers `FEISHU_COMPUTER_OFFLINE`, `LARK_CLI_NOT_INSTALLED` or
+  `FEISHU_SCOPES_NOT_ENABLED`. Disconnecting leaves the owner's lark-cli login
+  alone. While the Computer is offline, polls, syncs and tool calls fail
+  without changing the connection, and a listener catches up from its
+  watermark later. An Agent tool call does not check the login first: the
+  six-hourly reconcile does, and a call that finds it broken fails as not
+  active. Its Agent tools (`FEISHU_MAIL_*`) run in
+  `externalsource/feishu_mail_tools.go` behind
   `agentconnectedapps.WithNativeToolkit`, so admission, confirmation cards and
-  operation IDs match Composio's tools. A Feishu Mail connection imports no
-  mail from before it: its snapshot completes empty and the nightly sync reads
-  the inbox and sent folders from the connection time on. Its listener polls
-  the inbox against a received-time watermark. Email canvases target `gmail`
-  or `feishu_mail`; both build one RFC 5322 message, which Feishu's draft API
+  operation IDs match Composio's tools; a confirmed send runs on the Computer
+  when the card is approved. A Feishu Mail connection imports no mail from
+  before it: its snapshot completes empty and the nightly sync reads the inbox
+  and sent folders from the connection time on. Its listener polls the inbox
+  against a received-time watermark. Email canvases target `gmail` or
+  `feishu_mail`; both build one RFC 5322 message, which Feishu's draft API
   takes as is, and the draft bindings and delivery receipts are shared.
 - `internal/<feature>`: business behavior, transactions and data access with
   package tests: `collaboration` (Human Rooms and Messages),

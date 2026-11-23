@@ -147,19 +147,6 @@ export const connectorMessages = defineMessages("connectors", {
   authorizationComplete: "Authorization complete",
   canCloseWindow: "You can close this window.",
 
-  // Window the Feishu consent returns to
-  feishuFinishing: "Finishing authorization...",
-  feishuAuthorizationCancelled:
-    "Authorization was cancelled. Close this window and connect again.",
-  feishuScopesMissing:
-    "Your Feishu app does not grant these permissions yet. Ask your admin to enable them and approve a new version, then connect again.",
-  feishuRefreshDisabled:
-    "Your Feishu app cannot keep you signed in. Ask your admin to enable offline_access and refreshing user access tokens, then connect again.",
-  feishuAuthorizationStale:
-    "This authorization has expired. Close this window and connect again.",
-  feishuAuthorizationFailed:
-    "Authorization could not be completed. Close this window and connect again.",
-
   // Web search backends, beside the app groups. Backend names, descriptions
   // and free tier text come from TeamHub.
   filterWebSearch: "Web search",

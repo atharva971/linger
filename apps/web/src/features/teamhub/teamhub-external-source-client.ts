@@ -27,8 +27,6 @@ export interface TeamHubExternalSourceClient {
   completeExternalConnectionAuthorization(
     connectedAccountId?: string,
   ): Promise<void>;
-  /** Hands TeamHub the code a Feishu consent page returned; needs no session. */
-  completeFeishuAuthorization(state: string, code: string): Promise<void>;
   createExternalConnection(
     appKey: TeamHubExternalAppKey,
   ): Promise<TeamHubExternalConnection>;
@@ -101,12 +99,6 @@ export function createHttpTeamHubExternalSourceClient(
           body: connectedAccountId
             ? { connected_account_id: connectedAccountId }
             : {},
-        }),
-      ),
-    completeFeishuAuthorization: (state, code) =>
-      done(
-        api.POST("/v0/external-connection-completions/feishu", {
-          body: { state, code },
         }),
       ),
     createExternalConnection: async (appKey) =>

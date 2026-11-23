@@ -105,9 +105,10 @@ Composio       holds the app keys; an approved write runs exactly once
 ```
 
 <sub>Feishu Mail is the exception: Composio has no Feishu toolkit, so TeamHub
-authorizes it with the deployment's own Feishu custom app, configured in the
-server environment, and keeps the tokens itself. People connect it from the
-authorization card an Agent posts in chat, not from the Apps page.</sub>
+runs it through each person's own lark-cli on the Computer that runs their
+Another Me, and keeps no Feishu credentials. People share it by asking their
+Another Me in chat; it shows among Another Me's connectors, not on the Apps
+page.</sub>
 
 | Concern                    | How                                                                                                                        |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |

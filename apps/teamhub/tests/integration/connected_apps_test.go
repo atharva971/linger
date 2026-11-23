@@ -143,10 +143,11 @@ func TestConnectedAppsCatalogAndGenericConnection(t *testing.T) {
 		if catalog.Apps[index].Key != want {
 			t.Fatalf("catalog[%d]=%q want=%q", index, catalog.Apps[index].Key, want)
 		}
-		// Feishu Mail waits for the deployment's own Feishu app, not Composio.
+		// Feishu Mail runs through owners' Computers, not Composio, and this
+		// app reaches no Computer.
 		if want == "feishu_mail" {
 			if catalog.Apps[index].Availability != "unavailable" {
-				t.Fatalf("feishu_mail is available without a Feishu app: %s", body)
+				t.Fatalf("feishu_mail is available without a way to reach Computers: %s", body)
 			}
 			continue
 		}

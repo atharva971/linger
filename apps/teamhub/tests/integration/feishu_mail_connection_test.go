@@ -1,15 +1,11 @@
 package integration_test
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,27 +13,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/app"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/config"
-	"github.com/simplexai-labs/linger/apps/teamhub/internal/feishu"
+	"github.com/simplexai-labs/linger/apps/teamhub/internal/externalsource"
+	nodeapi "github.com/simplexai-labs/linger/contracts-go/nodeservicesinternal"
 )
 
-// fakeFeishu serves the Open Platform calls Feishu Mail connections make: the
-// app check, the code exchange with PKCE, refreshes that rotate the refresh
-// token, and the mailbox profile.
+// fakeFeishu is the owner's Computer as Feishu Mail reaches it: the
+// feishu_mail tools its Daemon runs through the owner's lark-cli, over a fake
+// mailbox. It records which Computer each call reached.
 type fakeFeishu struct {
-	t      *testing.T
-	server *httptest.Server
-	mu     sync.Mutex
-	// codes maps an issued authorization code to its PKCE challenge and the
-	// scopes its token grants.
-	codes         map[string]fakeFeishuCode
-	access        map[string]bool
-	refresh       map[string]bool
-	issued        int
-	refreshes     int
-	rejectRefresh bool
+	*recordingLocalComputers
+	t  *testing.T
+	mu sync.Mutex
+	// The owner's lark-cli: logged in with every mail scope, the scopes its
+	// app does not enable, and the logins started on it, approved or not.
+	loggedIn   bool
+	notEnabled []string
+	logins     map[string]bool
+	targets    []nodeapi.LocalComputerToolCall
 	// The mailbox: its messages by ID and folder, saved drafts by ID, the
 	// drafts sent, and the moves made.
 	mail    map[string]map[string]any
@@ -58,14 +52,9 @@ func fakeFeishuMessage(id, from, subject, body string, hoursAgo float64, state i
 	}
 }
 
-type fakeFeishuCode struct {
-	challenge string
-	scopes    []string
-}
-
 func newFakeFeishu(t *testing.T) *fakeFeishu {
 	t.Helper()
-	fake := &fakeFeishu{t: t, codes: map[string]fakeFeishuCode{}, access: map[string]bool{}, refresh: map[string]bool{}, drafts: map[string][]byte{},
+	return &fakeFeishu{recordingLocalComputers: &recordingLocalComputers{}, t: t, logins: map[string]bool{}, drafts: map[string][]byte{},
 		mail: map[string]map[string]any{
 			"msg_1":       fakeFeishuMessage("msg_1", "alice@example.com", "Quarterly plan", "Can we meet?", 1, 1),
 			"msg_receipt": fakeFeishuMessage("msg_receipt", "no-reply@shop.example.com", "Your receipt", "Paid", 2, 1),
@@ -74,153 +63,144 @@ func newFakeFeishu(t *testing.T) *fakeFeishu {
 		},
 		folders: map[string][]string{"INBOX": {"msg_1", "msg_receipt", "msg_old"}, "SENT": {"msg_sent"}},
 	}
-	fake.server = httptest.NewServer(http.HandlerFunc(fake.serveHTTP))
-	registerIntegrationServerCleanup(t, fake.server)
-	return fake
 }
 
-func (f *fakeFeishu) issueCode(code, challenge string, scopes []string) {
+// withFeishuComputer makes fake the Computer every owner's Feishu Mail runs on.
+func withFeishuComputer(fake *fakeFeishu) appOption { return withLocalComputers(fake) }
+
+func (f *fakeFeishu) CallLocalComputerToolResult(_ context.Context, call nodeapi.LocalComputerToolCall) (map[string]any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.codes[code] = fakeFeishuCode{challenge: challenge, scopes: scopes}
-}
-
-func (f *fakeFeishu) refreshCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.refreshes
-}
-
-func (f *fakeFeishu) setRejectRefresh(reject bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.rejectRefresh = reject
-}
-
-func (f *fakeFeishu) serveHTTP(w http.ResponseWriter, r *http.Request) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	write := func(status int, body any) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(body)
+	if call.Server != nodeapi.FeishuMail {
+		f.t.Errorf("unexpected Computer tool server %s", call.Server)
+		return map[string]any{"status": "unavailable"}, nil
 	}
-	if mailPath, ok := strings.CutPrefix(r.URL.Path, "/open-apis/mail/v1/user_mailboxes/me/"); ok && mailPath != "profile" {
-		if !f.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")] {
-			write(http.StatusUnauthorized, map[string]any{"code": 99991668, "msg": "invalid access token"})
-			return
+	f.targets = append(f.targets, call)
+	// The arguments reach the Computer as JSON.
+	var arguments map[string]any
+	if encoded, err := json.Marshal(call.Arguments); err != nil || json.Unmarshal(encoded, &arguments) != nil {
+		f.t.Errorf("arguments do not survive JSON: %v", call.Arguments)
+	}
+	loginID, _ := arguments["login_id"].(string)
+	switch call.ToolName {
+	case "status":
+		switch {
+		case !f.loggedIn:
+			return map[string]any{"status": "auth_required"}, nil
+		case len(f.notEnabled) > 0:
+			return map[string]any{"status": "missing_scope", "missing_scopes": anyList(f.notEnabled), "app_missing_scopes": anyList(f.notEnabled)}, nil
 		}
-		f.serveMail(r, mailPath, write)
-		return
-	}
-	var body map[string]string
-	if r.Method == http.MethodPost {
-		_ = json.NewDecoder(r.Body).Decode(&body)
-	}
-	switch r.URL.Path {
-	case "/open-apis/authen/v2/oauth/token":
-		if body["client_id"] != "cli_test" || body["client_secret"] != "secret" {
-			write(http.StatusUnauthorized, map[string]any{"code": 20002, "error": "invalid_client"})
-			return
+		return map[string]any{"status": "ok", "address": "Zhang@Example.com"}, nil
+	case "login_start":
+		f.logins[loginID] = false
+		return map[string]any{"status": "ok", "verification_url": "https://accounts.feishu.cn/oauth/v1/device/verify?flow=" + loginID, "expires_in": float64(600)}, nil
+	case "login_wait":
+		approved, ok := f.logins[loginID]
+		switch {
+		case !ok:
+			return map[string]any{"status": "expired"}, nil
+		case !approved:
+			return map[string]any{"status": "pending"}, nil
 		}
-		var scopes []string
-		switch body["grant_type"] {
-		case "authorization_code":
-			issued, ok := f.codes[body["code"]]
-			sum := sha256.Sum256([]byte(body["code_verifier"]))
-			if !ok || base64.RawURLEncoding.EncodeToString(sum[:]) != issued.challenge {
-				write(http.StatusBadRequest, map[string]any{"code": 20050, "error": "invalid_grant"})
-				return
-			}
-			delete(f.codes, body["code"])
-			scopes = issued.scopes
-		case "refresh_token":
-			if f.rejectRefresh || !f.refresh[body["refresh_token"]] {
-				write(http.StatusBadRequest, map[string]any{"code": 20064, "error": "invalid_grant"})
-				return
-			}
-			delete(f.refresh, body["refresh_token"])
-			f.refreshes++
-			scopes = feishu.RequestedScopes()
-		default:
-			write(http.StatusBadRequest, map[string]any{"code": 20001, "error": "unsupported_grant_type"})
-			return
+		delete(f.logins, loginID)
+		f.loggedIn = true
+		return map[string]any{"status": "ok"}, nil
+	case "api":
+		if !f.loggedIn {
+			return map[string]any{"status": "auth_required"}, nil
 		}
-		f.issued++
-		access, refresh := fmt.Sprintf("u-%d", f.issued), fmt.Sprintf("ur-%d", f.issued)
-		f.access[access], f.refresh[refresh] = true, true
-		write(http.StatusOK, map[string]any{
-			"code": 0, "access_token": access, "expires_in": 7200, "refresh_token": refresh,
-			"refresh_token_expires_in": 604800, "token_type": "Bearer", "scope": strings.Join(scopes, " "),
-		})
-	case "/open-apis/mail/v1/user_mailboxes/me/profile":
-		if !f.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")] {
-			write(http.StatusUnauthorized, map[string]any{"code": 99991668, "msg": "invalid access token"})
-			return
-		}
-		write(http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"primary_email_address": "Zhang@Example.com"}})
-	default:
-		f.t.Errorf("unexpected Feishu request %s %s", r.Method, r.URL.Path)
-		write(http.StatusNotFound, map[string]any{"code": 404})
-	}
-}
-
-// serveMail answers the mail API with one inbox message and the drafts the
-// test saves.
-func (f *fakeFeishu) serveMail(r *http.Request, path string, write func(int, any)) {
-	var body map[string]any
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body)
-	}
-	switch {
-	case r.Method == http.MethodGet && path == "messages":
-		ids, ok := f.folders[r.URL.Query().Get("folder_id")]
+		method, _ := arguments["method"].(string)
+		path, _ := arguments["path"].(string)
+		mailPath, ok := strings.CutPrefix(path, "/open-apis/mail/v1/user_mailboxes/me/")
 		if !ok {
-			write(http.StatusBadRequest, map[string]any{"code": 1230001, "msg": "folder_id required"})
-			return
+			f.t.Errorf("a Feishu Mail call left the mailbox: %s", path)
+			return map[string]any{"status": "invalid_request"}, nil
 		}
-		write(http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"items": ids, "has_more": false}})
-	case r.Method == http.MethodPost && path == "messages/batch_get":
+		params, _ := arguments["params"].(map[string]any)
+		data, _ := arguments["data"].(map[string]any)
+		return f.serveMail(method, mailPath, params, data), nil
+	}
+	f.t.Errorf("unexpected Feishu Mail tool %s", call.ToolName)
+	return map[string]any{"status": "unavailable"}, nil
+}
+
+// serveMail answers the mail API as lark-cli relays it: the response's data,
+// or a refusal with Feishu's code.
+func (f *fakeFeishu) serveMail(method, path string, params, body map[string]any) map[string]any {
+	ok := func(data map[string]any) map[string]any { return map[string]any{"status": "ok", "data": data} }
+	switch {
+	case method == http.MethodGet && path == "messages":
+		ids, found := f.folders[fmt.Sprint(params["folder_id"])]
+		if !found {
+			return map[string]any{"status": "failed", "code": float64(1230001), "detail": "folder_id required"}
+		}
+		return ok(map[string]any{"items": anyList(ids), "has_more": false})
+	case method == http.MethodPost && path == "messages/batch_get":
 		ids, _ := body["message_ids"].([]any)
 		messages := make([]any, 0, len(ids))
 		for _, id := range ids {
-			if message, ok := f.mail[fmt.Sprint(id)]; ok {
+			if message, found := f.mail[fmt.Sprint(id)]; found {
 				messages = append(messages, message)
 			}
 		}
-		write(http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"messages": messages}})
-	case r.Method == http.MethodGet && strings.HasPrefix(path, "messages/"):
-		message, ok := f.mail[strings.TrimPrefix(path, "messages/")]
-		if !ok {
-			write(http.StatusNotFound, map[string]any{"code": 1234008, "msg": "message not found"})
-			return
+		return ok(map[string]any{"messages": messages})
+	case method == http.MethodGet && strings.HasPrefix(path, "messages/"):
+		message, found := f.mail[strings.TrimPrefix(path, "messages/")]
+		if !found {
+			return map[string]any{"status": "failed", "code": float64(1234008), "error_subtype": "not_found", "detail": "message not found"}
 		}
-		write(http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"message": message}})
-	case r.Method == http.MethodPost && path == "drafts":
+		return ok(map[string]any{"message": message})
+	case method == http.MethodPost && path == "drafts":
 		raw, err := base64.URLEncoding.DecodeString(fmt.Sprint(body["raw"]))
 		if err != nil {
-			write(http.StatusBadRequest, map[string]any{"code": 1230001, "msg": "raw must be base64url"})
-			return
+			return map[string]any{"status": "failed", "code": float64(1230001), "detail": "raw must be base64url"}
 		}
 		id := fmt.Sprintf("draft_%d", len(f.drafts)+1)
 		f.drafts[id] = raw
-		write(http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"draft": map[string]any{"id": id}}})
-	case r.Method == http.MethodGet && strings.HasPrefix(path, "drafts/"):
+		return ok(map[string]any{"draft": map[string]any{"id": id}})
+	case method == http.MethodGet && strings.HasPrefix(path, "drafts/"):
 		id := strings.TrimPrefix(path, "drafts/")
-		write(http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"draft": map[string]any{
+		return ok(map[string]any{"draft": map[string]any{
 			"id": id, "message": map[string]any{"message_id": "draft_message_" + id, "raw": base64.URLEncoding.EncodeToString(f.drafts[id])},
-		}}})
-	case r.Method == http.MethodPost && strings.HasPrefix(path, "drafts/") && strings.HasSuffix(path, "/send"):
+		}})
+	case method == http.MethodPost && strings.HasPrefix(path, "drafts/") && strings.HasSuffix(path, "/send"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "drafts/"), "/send")
 		f.sent = append(f.sent, id)
-		write(http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"message_id": "sent_" + id, "thread_id": "thread_sent"}})
-	case r.Method == http.MethodPost && path == "messages/batch_modify":
+		return ok(map[string]any{"message_id": "sent_" + id, "thread_id": "thread_sent"})
+	case method == http.MethodPost && path == "messages/batch_modify":
 		f.moves = append(f.moves, body)
-		write(http.StatusOK, map[string]any{"code": 0})
-	default:
-		f.t.Errorf("unexpected Feishu mail request %s %s", r.Method, path)
-		write(http.StatusNotFound, map[string]any{"code": 404})
+		return ok(map[string]any{})
 	}
+	f.t.Errorf("unexpected Feishu mail request %s %s", method, path)
+	return map[string]any{"status": "failed", "code": float64(404)}
+}
+
+func anyList(values []string) []any {
+	list := make([]any, len(values))
+	for i, value := range values {
+		list[i] = value
+	}
+	return list
+}
+
+func (f *fakeFeishu) approveLogins() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for id := range f.logins {
+		f.logins[id] = true
+	}
+}
+
+func (f *fakeFeishu) setLoggedIn(loggedIn bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loggedIn = loggedIn
+}
+
+func (f *fakeFeishu) setNotEnabled(scopes ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notEnabled = scopes
 }
 
 func (f *fakeFeishu) sentDrafts() []string {
@@ -229,171 +209,206 @@ func (f *fakeFeishu) sentDrafts() []string {
 	return slices.Clone(f.sent)
 }
 
-func TestFeishuMailConnectsRefreshesAndDisconnectsWithoutComposio(t *testing.T) {
-	allowParallelIntegrationTest(t)
-	databaseURL := newIntegrationDatabase(t)
-	pool, err := pgxpool.New(context.Background(), databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	fake := newFakeFeishu(t)
-	cfg := config.ForTest(func(c *config.Config) {
-		c.DatabaseURL = databaseURL
-		c.SessionTTL = time.Hour
-		c.CookieName = "teamhub_session"
-		c.ArtifactStorageRoot = t.TempDir()
-		withFeishuApp(c, fake, 7)
-	})
-	application, err := newIntegrationApp(context.Background(), cfg, starting(app.JobQueue))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(application.Close)
-	server := httptest.NewServer(application.Handler())
-	registerIntegrationServerCleanup(t, server)
-	env := &testEnv{t: t, databaseURL: databaseURL, pool: pool, server: server}
-	alice := env.login("alice", alicePassword)
+func (f *fakeFeishu) draft(id string) []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.drafts[id]
+}
 
-	// The server's Feishu app makes Feishu Mail available without Composio.
-	var catalog struct {
-		Apps []struct {
-			Key          string `json:"key"`
-			Availability string `json:"availability"`
-		} `json:"apps"`
+func (f *fakeFeishu) movesMade() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.moves)
+}
+
+func (f *fakeFeishu) computersReached() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	reached := []string{}
+	for _, call := range f.targets {
+		if !slices.Contains(reached, call.ComputerId) {
+			reached = append(reached, call.ComputerId)
+		}
 	}
+	return reached
+}
+
+// authorizeFeishuMail connects alice's mailbox through a lark-cli login on
+// her AnotherMe's Computer and returns the active connection. approve, when
+// set, runs while the connection waits on the login, as the Connect button of
+// a chat card does.
+func authorizeFeishuMail(t *testing.T, env *testEnv, alice *http.Client, fake *fakeFeishu, approve func(connectionID string)) string {
+	t.Helper()
+	runAliceAnotherMeOnAComputer(t, env)
+	connectionID, connectURL := createFeishuMailConnection(t, env, alice, "feishu-connect")
+	if !strings.HasPrefix(connectURL, "https://accounts.feishu.cn/") {
+		t.Fatalf("connect URL = %q", connectURL)
+	}
+	if approve != nil {
+		approve(connectionID)
+	}
+	finishFeishuLogin(t, env, alice, fake, connectionID)
+	return connectionID
+}
+
+// finishFeishuLogin approves the lark-cli logins on the fake Computer, as the
+// owner does on Feishu's page, and waits for the connection to turn active.
+// The connection's checks poll the login; asking for its check at once, as a
+// returning authorization window does, keeps the test off the test database
+// container's clock, which may run ahead of this process.
+func finishFeishuLogin(t *testing.T, env *testEnv, alice *http.Client, fake *fakeFeishu, connectionID string) {
+	t.Helper()
+	fake.approveLogins()
+	checkFeishuConnectionNow(t, env, alice, connectionID)
+	if !waitForExternalSource(func() bool { return feishuConnectionStatus(t, env, connectionID) == "active" }) {
+		t.Fatalf("the Feishu Mail connection stayed %s", feishuConnectionStatus(t, env, connectionID))
+	}
+}
+
+func checkFeishuConnectionNow(t *testing.T, env *testEnv, alice *http.Client, connectionID string) {
+	t.Helper()
+	var upstreamID string
+	if err := env.pool.QueryRow(t.Context(), `SELECT upstream_connection_id FROM external_connections WHERE id=$1`, connectionID).Scan(&upstreamID); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, body := env.request(alice, http.MethodPost, "/v0/external-connection-completions", map[string]string{"connected_account_id": upstreamID}, ""); status != http.StatusNoContent {
+		t.Fatalf("check now status=%d body=%s", status, body)
+	}
+}
+
+// runAliceAnotherMeOnAComputer puts alice's active AnotherMe on her online
+// fixture Computer, whose lark-cli Feishu Mail runs through.
+func runAliceAnotherMeOnAComputer(t *testing.T, env *testEnv) {
+	t.Helper()
+	actorID := anotherMeActorID(t, env, acmeTenant, "actor_acme_alice")
+	if actorID == "" {
+		if connectAnotherMeComputer(t, env, acmeTenant, "actor_acme_alice") == "" {
+			t.Fatal("alice has no AnotherMe to run Feishu Mail through")
+		}
+		return
+	}
+	seedAnotherMeComputers(t, env.pool)
+	bindLocalFixtureRegistration(t, env.pool, actorID)
+	if _, err := env.pool.Exec(t.Context(), `UPDATE agent_registrations SET agent_management_id=coalesce(agent_management_id,'agent_alice_another_me') WHERE actor_id=$1`, actorID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createFeishuMailConnection(t *testing.T, env *testEnv, alice *http.Client, key string) (string, string) {
+	t.Helper()
+	status, _, body := env.request(alice, http.MethodPost, "/v0/external-connections", map[string]string{"app_key": externalsource.FeishuMailAppKey}, key)
+	if status != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", status, body)
+	}
+	var connection struct {
+		ID         string `json:"id"`
+		Status     string `json:"status"`
+		ConnectURL string `json:"connect_url"`
+	}
+	decode(t, body, &connection)
+	if connection.Status != "pending" {
+		t.Fatalf("connection = %s", body)
+	}
+	return connection.ID, connection.ConnectURL
+}
+
+func feishuConnectionStatus(t *testing.T, env *testEnv, connectionID string) string {
+	t.Helper()
+	var current string
+	if err := env.pool.QueryRow(t.Context(), `SELECT status FROM external_connections WHERE id=$1`, connectionID).Scan(&current); err != nil {
+		t.Fatal(err)
+	}
+	return current
+}
+
+func TestFeishuMailConnectsThroughTheOwnersLarkCLI(t *testing.T) {
+	allowParallelIntegrationTest(t)
+	fake := newFakeFeishu(t)
+	env, alice := newTaskWorkerEnv(t, starting(app.JobQueue), withAgentManagement(&recordingAgentManagement{}), withFeishuComputer(fake),
+		withConfig(func(cfg *config.Config) { cfg.Jobs.PollInterval = riverTestPollInterval }))
+
+	// Reaching owners' Computers makes Feishu Mail available without Composio.
 	status, _, body := env.request(alice, http.MethodGet, "/v0/external-apps", nil, "")
-	if status != http.StatusOK {
+	if status != http.StatusOK || !strings.Contains(string(body), `"key":"feishu_mail"`) {
 		t.Fatalf("list apps status=%d body=%s", status, body)
 	}
-	decode(t, body, &catalog)
-	if i := slices.IndexFunc(catalog.Apps, func(app struct {
-		Key          string `json:"key"`
-		Availability string `json:"availability"`
-	}) bool {
-		return app.Key == "feishu_mail"
-	}); i < 0 || catalog.Apps[i].Availability != "available" || strings.Contains(string(body), "cli_test") {
-		t.Fatalf("catalog = %s", body)
-	}
 
-	connect := func(key string) (string, string, string) {
-		t.Helper()
-		status, _, body := env.request(alice, http.MethodPost, "/v0/external-connections", map[string]string{"app_key": "feishu_mail"}, key)
-		if status != http.StatusCreated {
-			t.Fatalf("create status=%d body=%s", status, body)
-		}
-		var connection struct {
-			ID         string `json:"id"`
-			Status     string `json:"status"`
-			ConnectURL string `json:"connect_url"`
-		}
-		decode(t, body, &connection)
-		consent, err := url.Parse(connection.ConnectURL)
-		if err != nil || connection.Status != "pending" || consent.Path != "/open-apis/authen/v1/authorize" {
-			t.Fatalf("connection = %s", body)
-		}
-		query := consent.Query()
-		if query.Get("client_id") != "cli_test" || query.Get("code_challenge_method") != "S256" || !strings.Contains(query.Get("scope"), feishu.OfflineAccessScope) {
-			t.Fatalf("consent page = %s", connection.ConnectURL)
-		}
-		return connection.ID, query.Get("state"), query.Get("code_challenge")
+	// Without an online Computer running her AnotherMe, there is no lark-cli
+	// to run.
+	status, _, body = env.request(alice, http.MethodPost, "/v0/external-connections", map[string]string{"app_key": externalsource.FeishuMailAppKey}, "feishu-offline")
+	if status != http.StatusConflict || !strings.Contains(string(body), "FEISHU_COMPUTER_OFFLINE") {
+		t.Fatalf("offline status=%d body=%s", status, body)
 	}
+	if connectAnotherMeComputer(t, env, acmeTenant, "actor_acme_alice") == "" {
+		t.Fatal("alice has no AnotherMe")
+	}
+	computerID := anotherMeFixtureComputerID(acmeTenant, "actor_acme_alice")
 
-	// An authorization that lacks a mail scope is refused and names it; a
-	// browser without a Linger session may hand the code over.
-	_, limitedState, limitedChallenge := connect("feishu-limited")
-	fake.issueCode("code-limited", limitedChallenge, []string{feishu.OfflineAccessScope, "mail:user_mailbox:readonly"})
-	status, _, body = env.request(http.DefaultClient, http.MethodPost, "/v0/external-connection-completions/feishu", map[string]string{"state": limitedState, "code": "code-limited"}, "")
-	if status != http.StatusBadRequest || !strings.Contains(string(body), "FEISHU_SCOPES_MISSING") || !strings.Contains(string(body), "mail:user_mailbox.message:send") {
-		t.Fatalf("limited authorization status=%d body=%s", status, body)
+	// A scope the lark-cli app does not enable cannot be granted by logging in.
+	fake.setLoggedIn(true)
+	fake.setNotEnabled("mail:user_mailbox.message:send")
+	status, _, body = env.request(alice, http.MethodPost, "/v0/external-connections", map[string]string{"app_key": externalsource.FeishuMailAppKey}, "feishu-scopes")
+	if status != http.StatusConflict || !strings.Contains(string(body), "FEISHU_SCOPES_NOT_ENABLED") || !strings.Contains(string(body), "mail:user_mailbox.message:send") {
+		t.Fatalf("scopes status=%d body=%s", status, body)
 	}
+	fake.setNotEnabled()
 
-	connectionID, state, challenge := connect("feishu-full")
-	fake.issueCode("code-full", challenge, feishu.RequestedScopes())
-	status, _, body = env.request(http.DefaultClient, http.MethodPost, "/v0/external-connection-completions/feishu", map[string]string{"state": "tampered" + state, "code": "code-full"}, "")
-	if status != http.StatusBadRequest {
-		t.Fatalf("tampered state status=%d body=%s", status, body)
+	// Logged out, connecting starts a lark-cli login whose page is the link;
+	// the connection stays pending until alice finishes it.
+	fake.setLoggedIn(false)
+	connectionID, connectURL := createFeishuMailConnection(t, env, alice, "feishu-login")
+	if !strings.HasPrefix(connectURL, "https://accounts.feishu.cn/") {
+		t.Fatalf("connect URL = %q", connectURL)
 	}
-	status, _, body = env.request(http.DefaultClient, http.MethodPost, "/v0/external-connection-completions/feishu", map[string]string{"state": state, "code": "code-full"}, "")
-	if status != http.StatusNoContent {
-		t.Fatalf("complete status=%d body=%s", status, body)
+	if current := feishuConnectionStatus(t, env, connectionID); current != "pending" {
+		t.Fatalf("status before the login finished = %s", current)
 	}
-	var revision int64
-	connectionState := func() (string, string) {
-		var current, label string
-		if err := pool.QueryRow(context.Background(), `SELECT status,coalesce(identity_label,''),revision FROM external_connections WHERE id=$1`, connectionID).Scan(&current, &label, &revision); err != nil {
-			t.Fatal(err)
-		}
-		return current, label
-	}
-	if !waitForExternalSource(func() bool {
-		current, label := connectionState()
-		return current == "active" && label == "zhang@example.com"
-	}) {
-		current, label := connectionState()
-		t.Fatalf("connection did not become active: status=%s label=%s", current, label)
-	}
-	var principal, toolkit, authConfig string
-	if err := pool.QueryRow(context.Background(), `SELECT remote_principal_key,toolkit_slug,auth_config_id FROM external_connections WHERE id=$1`, connectionID).Scan(&principal, &toolkit, &authConfig); err != nil {
+	finishFeishuLogin(t, env, alice, fake, connectionID)
+	var label, principal, toolkit, authConfig string
+	if err := env.pool.QueryRow(t.Context(), `SELECT coalesce(identity_label,''),coalesce(remote_principal_key,''),toolkit_slug,auth_config_id FROM external_connections WHERE id=$1`, connectionID).Scan(&label, &principal, &toolkit, &authConfig); err != nil {
 		t.Fatal(err)
 	}
-	if principal != "feishu_mail:zhang@example.com" || toolkit != "feishu" || authConfig != "cli_test" {
-		t.Fatalf("principal=%s toolkit=%s auth_config=%s", principal, toolkit, authConfig)
+	if label != "zhang@example.com" || principal != "feishu_mail:zhang@example.com" || toolkit != "feishu" || authConfig != "lark-cli" {
+		t.Fatalf("label=%s principal=%s toolkit=%s auth_config=%s", label, principal, toolkit, authConfig)
 	}
-	var sealedAccess []byte
-	if err := pool.QueryRow(context.Background(), `SELECT token.access_token_ciphertext FROM feishu_upstream_tokens token JOIN external_connections connection ON connection.upstream_connection_id=token.upstream_id WHERE connection.id=$1`, connectionID).Scan(&sealedAccess); err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(sealedAccess, []byte("u-")) {
-		t.Fatal("the access token is stored unsealed")
+	if reached := fake.computersReached(); !slices.Equal(reached, []string{computerID}) {
+		t.Fatalf("Computers reached = %v, want alice's %s", reached, computerID)
 	}
 
-	// An expiring access token is refreshed at the next check; Feishu rotates
-	// the refresh token, so the stored one is replaced.
-	checkNow := func() {
+	// A lark-cli that no longer serves the mailbox expires the connection at
+	// its next check.
+	fake.setLoggedIn(false)
+	revision := func(connectionID string) int64 {
 		t.Helper()
-		if _, err := pool.Exec(context.Background(), `UPDATE feishu_upstream_tokens SET access_expires_at=now()-interval '1 minute' WHERE upstream_id=(SELECT upstream_connection_id FROM external_connections WHERE id=$1)`, connectionID); err != nil {
+		var current int64
+		if err := env.pool.QueryRow(t.Context(), `SELECT revision FROM external_connections WHERE id=$1`, connectionID).Scan(&current); err != nil {
 			t.Fatal(err)
 		}
-		connectionState()
-		status, _, body := env.request(alice, http.MethodPost, "/v0/external-connections/"+connectionID+"/status-checks", map[string]int64{"expected_revision": revision}, "")
-		if status != http.StatusOK && status != http.StatusCreated && status != http.StatusAccepted {
-			t.Fatalf("status check status=%d body=%s", status, body)
-		}
+		return current
 	}
-	checkNow()
-	if !waitForExternalSource(func() bool { return fake.refreshCount() == 1 }) {
-		t.Fatalf("refreshes = %d", fake.refreshCount())
+	status, _, body = env.request(alice, http.MethodPost, "/v0/external-connections/"+connectionID+"/status-checks", map[string]int64{"expected_revision": revision(connectionID)}, "")
+	if status != http.StatusOK && status != http.StatusCreated && status != http.StatusAccepted {
+		t.Fatalf("status check status=%d body=%s", status, body)
 	}
-	if !waitForExternalSource(func() bool {
-		var requested bool
-		_ = pool.QueryRow(context.Background(), `SELECT status_check_requested_at IS NOT NULL FROM external_connections WHERE id=$1`, connectionID).Scan(&requested)
-		current, _ := connectionState()
-		return !requested && current == "active"
-	}) {
-		t.Fatal("the refreshed connection did not settle active")
+	if !waitForExternalSource(func() bool { return feishuConnectionStatus(t, env, connectionID) == "expired" }) {
+		t.Fatalf("status after logging out = %s", feishuConnectionStatus(t, env, connectionID))
 	}
 
-	// A refresh Feishu refuses means the user must authorize again.
-	fake.setRejectRefresh(true)
-	checkNow()
-	if !waitForExternalSource(func() bool { current, _ := connectionState(); return current == "expired" }) {
-		current, _ := connectionState()
-		t.Fatalf("connection status after a refused refresh = %s", current)
-	}
-
-	// Disconnecting forgets the tokens.
-	status, _, body = env.request(alice, http.MethodPost, "/v0/external-connections/"+connectionID+"/disconnects", map[string]int64{"expected_revision": revision}, "")
+	// Disconnecting leaves the owner's lark-cli login alone: it serves their
+	// other uses too.
+	status, _, body = env.request(alice, http.MethodPost, "/v0/external-connections/"+connectionID+"/disconnects", map[string]int64{"expected_revision": revision(connectionID)}, "")
 	if status != http.StatusOK && status != http.StatusAccepted {
 		t.Fatalf("disconnect status=%d body=%s", status, body)
 	}
-	if !waitForExternalSource(func() bool {
-		current, _ := connectionState()
-		var tokens int
-		_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM feishu_upstream_tokens token JOIN external_connections connection ON connection.upstream_connection_id=token.upstream_id WHERE connection.id=$1`, connectionID).Scan(&tokens)
-		return current == "revoked" && tokens == 0
-	}) {
-		current, _ := connectionState()
-		t.Fatalf("connection after disconnect = %s", current)
+	if !waitForExternalSource(func() bool { return feishuConnectionStatus(t, env, connectionID) == "revoked" }) {
+		t.Fatalf("status after disconnect = %s", feishuConnectionStatus(t, env, connectionID))
+	}
+
+	// Already logged in, a connection needs no login page.
+	fake.setLoggedIn(true)
+	againID, againURL := createFeishuMailConnection(t, env, alice, "feishu-again")
+	checkFeishuConnectionNow(t, env, alice, againID)
+	if againURL != "" || !waitForExternalSource(func() bool { return feishuConnectionStatus(t, env, againID) == "active" }) {
+		t.Fatalf("connection while logged in url=%q status=%s", againURL, feishuConnectionStatus(t, env, againID))
 	}
 }

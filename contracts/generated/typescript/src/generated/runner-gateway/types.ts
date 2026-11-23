@@ -1137,7 +1137,7 @@ export interface ComputerToolCall {
   owner_actor_id: Id;
   agent_id: Id;
   tool_session_id: Id;
-  server: "browser" | "playground";
+  server: "browser" | "playground" | "feishu_mail";
   tool_name: string;
   arguments: OpaqueObject;
   deadline_ms: number;

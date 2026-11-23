@@ -2,141 +2,138 @@ package feishu
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strings"
+	"reflect"
 	"testing"
-	"time"
 )
 
-func TestAuthorizeURLCarriesPKCEAndEveryMailScope(t *testing.T) {
-	client := New(Config{})
-	app := App{Region: RegionLark, ID: "cli_test", Secret: "secret"}
-	raw := client.AuthorizeURL(app, "https://linger.example/oauth/feishu-complete", "signed-state", CodeChallenge("verifier"))
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		t.Fatal(err)
+// fakeComputer answers each tool call with the next prepared result and
+// records the calls.
+type fakeComputer struct {
+	results []map[string]any
+	err     error
+	calls   []fakeCall
+}
+
+type fakeCall struct {
+	tool      string
+	arguments map[string]any
+}
+
+func (f *fakeComputer) call(_ context.Context, tool string, arguments map[string]any) (map[string]any, error) {
+	f.calls = append(f.calls, fakeCall{tool: tool, arguments: arguments})
+	if f.err != nil {
+		return nil, f.err
 	}
-	if parsed.Host != "accounts.larksuite.com" || parsed.Path != "/open-apis/authen/v1/authorize" {
-		t.Fatalf("authorize URL = %s", raw)
+	result := f.results[0]
+	f.results = f.results[1:]
+	return result, nil
+}
+
+func TestMailboxCallsTheOwnersMailboxPath(t *testing.T) {
+	computer := &fakeComputer{results: []map[string]any{{"status": "ok", "data": map[string]any{"items": []any{"m1", "m2"}, "has_more": true, "page_token": "next"}}}}
+	ids, next, err := NewMailbox(computer.call, nil).ListMessageIDs(context.Background(), FolderInbox, true, 20, "token")
+	if err != nil || !reflect.DeepEqual(ids, []string{"m1", "m2"}) || next != "next" {
+		t.Fatalf("ids = %v, next = %q, err = %v", ids, next, err)
 	}
-	query := parsed.Query()
-	if query.Get("client_id") != "cli_test" || query.Get("state") != "signed-state" || query.Get("code_challenge_method") != "S256" {
-		t.Fatalf("authorize query = %v", query)
-	}
-	if query.Get("code_challenge") != CodeChallenge("verifier") || query.Get("code_challenge") == "verifier" {
-		t.Fatalf("code challenge = %q", query.Get("code_challenge"))
-	}
-	scopes := strings.Fields(query.Get("scope"))
-	if scopes[0] != OfflineAccessScope || len(scopes) != len(MailScopes)+1 {
-		t.Fatalf("scopes = %v", scopes)
+	want := fakeCall{tool: "api", arguments: map[string]any{
+		"method": "GET", "path": "/open-apis/mail/v1/user_mailboxes/me/messages",
+		"params": map[string]any{"page_size": 20, "folder_id": "INBOX", "only_unread": true, "page_token": "token"},
+	}}
+	if !reflect.DeepEqual(computer.calls, []fakeCall{want}) {
+		t.Fatalf("calls = %#v", computer.calls)
 	}
 }
 
-func TestExchangeCodeReadsTokensAndGrantedScopes(t *testing.T) {
-	var body map[string]string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/open-apis/authen/v2/oauth/token" {
-			t.Fatalf("path = %s", r.URL.Path)
+func TestMailboxErrorsFollowTheComputersStatus(t *testing.T) {
+	cases := []struct {
+		result map[string]any
+		check  func(error) bool
+	}{
+		{map[string]any{"status": "auth_required"}, func(err error) bool { return errors.Is(err, ErrAuthorizationRequired) && IsAuthFailure(err) }},
+		{map[string]any{"status": "missing_scope", "missing_scopes": []any{"mail:a"}, "app_missing_scopes": []any{"mail:a"}}, func(err error) bool {
+			var missing *ScopesMissingError
+			return errors.As(err, &missing) && reflect.DeepEqual(missing.NotEnabled, []string{"mail:a"}) && IsAuthFailure(err)
+		}},
+		{map[string]any{"status": "failed", "code": float64(99991400)}, func(err error) bool {
+			var limited *RateLimitError
+			return errors.As(err, &limited)
+		}},
+		{map[string]any{"status": "failed", "code": float64(99991677)}, IsAuthFailure},
+		{map[string]any{"status": "failed", "code": float64(1230001), "detail": "no such message"}, func(err error) bool {
+			var apiErr *APIError
+			return errors.As(err, &apiErr) && apiErr.Code == 1230001 && !IsAuthFailure(err) && !IsComputerFailure(err)
+		}},
+		{map[string]any{"status": "failed", "error_subtype": "not_found"}, IsNotFound},
+		{map[string]any{"status": "not_installed"}, func(err error) bool {
+			var computer *ComputerError
+			return errors.As(err, &computer) && computer.Status == StatusNotInstalled
+		}},
+		{map[string]any{"status": "failed"}, IsComputerFailure},
+		{map[string]any{"status": "outcome_unknown"}, IsComputerFailure},
+	}
+	for _, testCase := range cases {
+		computer := &fakeComputer{results: []map[string]any{testCase.result}}
+		if _, err := NewMailbox(computer.call, nil).GetMessage(context.Background(), "m1"); !testCase.check(err) {
+			t.Fatalf("result %v: err = %v", testCase.result, err)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
+	}
+}
+
+func TestMailboxStatusAndLogin(t *testing.T) {
+	computer := &fakeComputer{results: []map[string]any{
+		{"status": "ok", "address": "Me@Example.com"},
+		{"status": "ok", "verification_url": "https://accounts.feishu.cn/v", "expires_in": float64(600)},
+		{"status": "pending"},
+		{"status": "ok"},
+		{"status": "expired"},
+	}}
+	mailbox := NewMailbox(computer.call, nil)
+	ctx := context.Background()
+	if address, err := mailbox.Status(ctx); err != nil || address != "me@example.com" {
+		t.Fatalf("status = %q, %v", address, err)
+	}
+	login, err := mailbox.StartLogin(ctx, "feishu_upstream_1")
+	if err != nil || login.URL != "https://accounts.feishu.cn/v" || login.ExpiresAt.IsZero() {
+		t.Fatalf("login = %#v, %v", login, err)
+	}
+	for _, want := range []LoginState{LoginPending, LoginDone, LoginGone} {
+		if state, err := mailbox.WaitLogin(ctx, "feishu_upstream_1"); err != nil || state != want {
+			t.Fatalf("wait = %v, %v; want %v", state, err, want)
 		}
-		_, _ = w.Write([]byte(`{"code":0,"access_token":"u-access","expires_in":7200,"refresh_token":"ur-refresh","refresh_token_expires_in":604800,"token_type":"Bearer","scope":"offline_access mail:user_mailbox:readonly"}`))
-	}))
-	defer server.Close()
-	before := time.Now()
-	token, err := New(Config{BaseURL: server.URL}).ExchangeCode(context.Background(), App{Region: RegionFeishu, ID: "cli_test", Secret: "secret"}, "code-1", "verifier-1", "https://linger.example/oauth/feishu-complete")
-	if err != nil {
-		t.Fatal(err)
 	}
-	if body["grant_type"] != "authorization_code" || body["code"] != "code-1" || body["code_verifier"] != "verifier-1" || body["client_secret"] != "secret" {
-		t.Fatalf("request body = %v", body)
-	}
-	if token.AccessToken != "u-access" || token.RefreshToken != "ur-refresh" {
-		t.Fatalf("token = %+v", token)
-	}
-	if token.AccessExpiresAt.Before(before.Add(2*time.Hour-time.Second)) || token.RefreshExpiresAt.Before(before.Add(7*24*time.Hour-time.Second)) {
-		t.Fatalf("expiries = %v %v", token.AccessExpiresAt, token.RefreshExpiresAt)
-	}
-	missing := token.MissingMailScopes()
-	if len(missing) != len(MailScopes)-1 {
-		t.Fatalf("missing = %v", missing)
+	if computer.calls[1].arguments["login_id"] != "feishu_upstream_1" || computer.calls[2].tool != "login_wait" {
+		t.Fatalf("calls = %#v", computer.calls)
 	}
 }
 
-func TestTokenWithoutRefreshTokenIsRefused(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"code":0,"access_token":"u-access","expires_in":7200}`))
-	}))
-	defer server.Close()
-	_, err := New(Config{BaseURL: server.URL}).Refresh(context.Background(), App{Region: RegionFeishu, ID: "cli", Secret: "s"}, "ur-old")
-	if !errors.Is(err, ErrNoRefreshToken) {
+func TestMailboxComputerOutageIsAComputerFailure(t *testing.T) {
+	outage := &ComputerError{Status: StatusComputerOffline}
+	computer := &fakeComputer{err: outage}
+	if _, err := NewMailbox(computer.call, nil).Status(context.Background()); !errors.Is(err, outage) || IsAuthFailure(err) {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-func TestRefreshRejectionIsAnAuthFailure(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"code":20064,"error":"invalid_grant","error_description":"refresh token revoked"}`))
-	}))
+func TestDownloadAttachmentFetchesThePresignedLinkItself(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("file")) }))
 	defer server.Close()
-	_, err := New(Config{BaseURL: server.URL}).Refresh(context.Background(), App{Region: RegionFeishu, ID: "cli", Secret: "s"}, "ur-old")
-	if !IsAuthFailure(err) {
-		t.Fatalf("err = %v", err)
+	computer := &fakeComputer{results: []map[string]any{{"status": "ok", "data": map[string]any{"download_urls": []any{
+		map[string]any{"attachment_id": "a1", "download_url": server.URL + "/a1"},
+	}}}}}
+	data, err := NewMailbox(computer.call, server.Client()).DownloadAttachment(context.Background(), "m1", "a1")
+	if err != nil || string(data) != "file" {
+		t.Fatalf("data = %q, err = %v", data, err)
 	}
-	if status, ok := ErrorStatus(err); !ok || status != http.StatusBadRequest {
-		t.Fatalf("status = %d %v", status, ok)
+	if computer.calls[0].arguments["path"] != "/open-apis/mail/v1/user_mailboxes/me/messages/m1/attachments/download_url" {
+		t.Fatalf("calls = %#v", computer.calls)
 	}
-}
-
-func TestRateLimitAndServerFailureAreNotRejections(t *testing.T) {
-	status := http.StatusTooManyRequests
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Retry-After", "30")
-		w.WriteHeader(status)
-	}))
-	defer server.Close()
-	client := New(Config{BaseURL: server.URL})
-	app := App{Region: RegionFeishu, ID: "cli", Secret: "s"}
-	var limited *RateLimitError
-	if _, err := client.Refresh(context.Background(), app, "ur-token"); !errors.As(err, &limited) || limited.RetryAfter != 30*time.Second {
-		t.Fatalf("err = %v", err)
-	}
-	status = http.StatusBadGateway
-	if _, err := client.Refresh(context.Background(), app, "ur-token"); err == nil || IsAppRejected(err) || IsAuthFailure(err) {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestCheckAppRejection(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/open-apis/auth/v3/tenant_access_token/internal" {
-			t.Fatalf("path = %s", r.URL.Path)
-		}
-		_, _ = w.Write([]byte(`{"code":10014,"msg":"app secret invalid"}`))
-	}))
-	defer server.Close()
-	err := New(Config{BaseURL: server.URL}).CheckApp(context.Background(), App{Region: RegionFeishu, ID: "cli", Secret: "wrong"})
-	if !IsAppRejected(err) {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestPrimaryMailboxUsesTheUserToken(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/open-apis/mail/v1/user_mailboxes/me/profile" || r.Header.Get("Authorization") != "Bearer u-access" {
-			t.Fatalf("request = %s %s", r.URL.Path, r.Header.Get("Authorization"))
-		}
-		_, _ = w.Write([]byte(`{"code":0,"data":{"primary_email_address":" Zhang@Example.COM "}}`))
-	}))
-	defer server.Close()
-	address, err := New(Config{BaseURL: server.URL}).PrimaryMailbox(context.Background(), RegionFeishu, "u-access")
-	if err != nil || address != "zhang@example.com" {
-		t.Fatalf("address = %q err = %v", address, err)
+	plain := &fakeComputer{results: []map[string]any{{"status": "ok", "data": map[string]any{"download_urls": []any{
+		map[string]any{"attachment_id": "a1", "download_url": "http://example.com/a1"},
+	}}}}}
+	if _, err := NewMailbox(plain.call, server.Client()).DownloadAttachment(context.Background(), "m1", "a1"); err == nil {
+		t.Fatal("a plain-HTTP attachment link was fetched")
 	}
 }

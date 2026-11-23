@@ -1,11 +1,9 @@
 package integration_test
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -14,60 +12,14 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/app"
-	"github.com/simplexai-labs/linger/apps/teamhub/internal/config"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/externalsource"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/feishu"
 )
 
-// withFeishuApp configures the deployment's Feishu custom app against the
-// fake Open Platform, as FEISHU_APP_ID and FEISHU_APP_SECRET do.
-func withFeishuApp(cfg *config.Config, fake *fakeFeishu, keyByte byte) {
-	cfg.ExternalApps.SecretEncryptionKey = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{keyByte}, 32))
-	cfg.ExternalApps.FeishuBaseURL = fake.server.URL
-	cfg.ExternalApps.FeishuAppID, cfg.ExternalApps.FeishuAppSecret, cfg.ExternalApps.FeishuAppRegion = "cli_test", "secret", "feishu"
-}
-
-// authorizeFeishuMail connects alice's mailbox through the fake consent and
-// returns the active connection. approve, when set, runs while the connection
-// waits on consent, as the Connect button of a chat card does.
-func authorizeFeishuMail(t *testing.T, env *testEnv, alice *http.Client, fake *fakeFeishu, approve func(connectionID string)) string {
-	t.Helper()
-	status, _, body := env.request(alice, http.MethodPost, "/v0/external-connections", map[string]string{"app_key": externalsource.FeishuMailAppKey}, "feishu-connect")
-	if status != http.StatusCreated {
-		t.Fatalf("create status=%d body=%s", status, body)
-	}
-	var connection struct {
-		ID         string `json:"id"`
-		ConnectURL string `json:"connect_url"`
-	}
-	decode(t, body, &connection)
-	consent, err := url.Parse(connection.ConnectURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if approve != nil {
-		approve(connection.ID)
-	}
-	fake.issueCode("code-agent", consent.Query().Get("code_challenge"), feishu.RequestedScopes())
-	if status, _, body = env.request(http.DefaultClient, http.MethodPost, "/v0/external-connection-completions/feishu", map[string]string{"state": consent.Query().Get("state"), "code": "code-agent"}, ""); status != http.StatusNoContent {
-		t.Fatalf("complete status=%d body=%s", status, body)
-	}
-	if !waitForExternalSource(func() bool {
-		var current string
-		_ = env.pool.QueryRow(t.Context(), `SELECT status FROM external_connections WHERE id=$1`, connection.ID).Scan(&current)
-		return current == "active"
-	}) {
-		t.Fatal("the Feishu Mail connection did not become active")
-	}
-	return connection.ID
-}
-
 func TestAgentReadsAndSendsFeishuMailAfterConfirmation(t *testing.T) {
 	allowParallelIntegrationTest(t)
 	fake := newFakeFeishu(t)
-	env, alice, issued, roomID := newAgentCLIIdentity(t, starting(app.JobQueue), withConfig(func(cfg *config.Config) {
-		withFeishuApp(cfg, fake, 5)
-	}))
+	env, alice, issued, roomID := newAgentCLIIdentity(t, starting(app.JobQueue), withAgentManagement(&recordingAgentManagement{}), withFeishuComputer(fake))
 	agent := func(path string, payload map[string]any) map[string]any {
 		t.Helper()
 		status, body := postAgentInRoom(t, env, issued.AccessToken, roomID, path, payload)
@@ -82,7 +34,7 @@ func TestAgentReadsAndSendsFeishuMailAfterConfirmation(t *testing.T) {
 	}
 
 	// Feishu Mail has no setup page: asked for it before it is connected, the
-	// Agent gets a card in the chat, and its Connect starts Feishu's consent.
+	// Agent gets a card in the chat, and its Connect starts a lark-cli login.
 	asked := agent("/api/agent/v1/apps/account", map[string]any{"app_key": externalsource.FeishuMailAppKey})
 	cardID, _ := asked["interaction_id"].(string)
 	if asked["status"] != "authorization_required" || cardID == "" {
@@ -136,7 +88,7 @@ func TestAgentReadsAndSendsFeishuMailAfterConfirmation(t *testing.T) {
 		"attachments": []any{map[string]any{"name": "notes.txt", "content_type": "text/plain", "content_base64": base64.StdEncoding.EncodeToString([]byte("notes"))}},
 	})
 	draftID, _ := drafted["data"].(map[string]any)["draft_id"].(string)
-	saved, err := feishu.ParseMessage(fake.drafts[draftID])
+	saved, err := feishu.ParseMessage(fake.draft(draftID))
 	if err != nil || !slices.Equal(saved.To, []string{"bob@example.com"}) || saved.Subject != "Plan" || len(saved.Attachments) != 1 || string(saved.Attachments[0].Data) != "notes" {
 		t.Fatalf("saved draft %s = %+v err=%v", draftID, saved, err)
 	}
@@ -163,8 +115,8 @@ func TestAgentReadsAndSendsFeishuMailAfterConfirmation(t *testing.T) {
 	}
 
 	archived := execute(externalsource.FeishuMailArchive, map[string]any{"message_id": "msg_1"})
-	if archived["data"].(map[string]any)["message_id"] != "msg_1" || len(fake.moves) != 1 || fake.moves[0]["add_folder"] != "ARCHIVED" {
-		t.Fatalf("archive = %v moves=%v", archived, fake.moves)
+	if moves := fake.movesMade(); archived["data"].(map[string]any)["message_id"] != "msg_1" || len(moves) != 1 || moves[0]["add_folder"] != "ARCHIVED" {
+		t.Fatalf("archive = %v moves=%v", archived, moves)
 	}
 
 	// A folder-wide list without search text is refused before Feishu is called.

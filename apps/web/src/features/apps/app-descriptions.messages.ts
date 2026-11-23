@@ -26,5 +26,5 @@ export const appDescriptionMessages = defineMessages("appDescriptions", {
     "Let Agents work with your Calendly event types and scheduled events.",
   outlookCalendar: "Let Agents work with your Outlook calendars and events.",
   feishuMail:
-    "Let Agents read and send your Feishu or Lark mail; new mail syncs to your Wiki each night.",
+    "Let your Another Me read and send your Feishu or Lark mail through lark-cli on your Computer; new mail syncs to your Wiki each night.",
 });

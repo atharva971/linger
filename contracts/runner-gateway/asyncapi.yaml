@@ -52,7 +52,9 @@ info:
     can swap it out; the call's executed model_invoke still follows. The
     service sends it only to a Computer release that decodes it.
     execute with kind
-    computer_tool runs native browser actions and retained Task output reads.
+    computer_tool runs native browser actions, retained Task output reads,
+    and Feishu Mail calls through the owner's own lark-cli login, limited to
+    the owner's mailbox API paths.
     TeamHub resolves the owner, Agent and Task scope; the Computer checks its
     current assignment and retained scope. No Meta Context or model turn is
     started. Responses carry the same owner and connection epoch.

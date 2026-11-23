@@ -61,7 +61,7 @@ func (a *App) resolveConnectorAccount(c *gin.Context) {
 	}
 	// No Composio app can be connected without the deployment's Composio key,
 	// so the user is asked for the key first; the Agent then asks again.
-	// Feishu Mail connects through the deployment's Feishu app instead.
+	// Feishu Mail connects through the owner's lark-cli instead.
 	if !a.externalSources.ProviderConfigured() && input.AppKey != externalsource.FeishuMailAppKey {
 		if !slices.ContainsFunc(a.externalSources.ListApps(), func(app externalsource.ExternalApp) bool { return app.Key == input.AppKey }) {
 			a.writeAgentAPIError(c, 400, api.AgentApiErrorCodeInvalidInput, "Unsupported application")

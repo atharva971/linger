@@ -155,7 +155,7 @@ const composioLogoBase = "https://logos.composio.dev/api/"
 var curatedApps = []ExternalApp{
 	{Key: "gmail", DisplayName: "Gmail", Description: "Import the last six months, up to 3,000 messages, for Profile and Wiki.", Capabilities: []string{"connect", "personal_wiki_import", "agent_tools"}, AllowsMultipleConnections: true},
 	{Key: "outlook", DisplayName: "Outlook Mail", Description: "Import the last six months, up to 3,000 messages, for Profile and Wiki.", Capabilities: []string{"connect", "personal_wiki_import", "agent_tools"}, AllowsMultipleConnections: true},
-	{Key: FeishuMailAppKey, DisplayName: "Feishu Mail", Description: "Let Agents read and send your Feishu or Lark mail; new mail syncs to your Wiki each night.", Capabilities: []string{"connect", "agent_tools"}, AllowsMultipleConnections: true, selfAuthorized: true},
+	{Key: FeishuMailAppKey, DisplayName: "Feishu Mail", Description: "Let your Another Me read and send your Feishu or Lark mail through lark-cli on your Computer; new mail syncs to your Wiki each night.", Capabilities: []string{"connect", "agent_tools"}, AllowsMultipleConnections: true, selfAuthorized: true},
 	{Key: "googledrive", DisplayName: "Google Drive", Description: "Let Agents work with your Drive files.", Capabilities: []string{"connect", "agent_tools"}, AllowsMultipleConnections: true},
 	{Key: "slack", DisplayName: "Slack", Description: "Connect workspaces and selected channels.", Capabilities: []string{"connect", "personal_wiki_import", "agent_tools"}, AllowsMultipleConnections: true},
 	{Key: "discord", DisplayName: "Discord", Description: "Connect one installed Discord server and selected channels.", Capabilities: []string{"connect", "personal_wiki_import", "agent_tools"}, AllowsMultipleConnections: true},

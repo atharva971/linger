@@ -2490,30 +2490,6 @@ paths:
         '400': { $ref: '../components/common.yaml#/components/responses/BadRequest' }
         '401': { $ref: '../components/common.yaml#/components/responses/Unauthenticated' }
         '404': { $ref: '../components/common.yaml#/components/responses/NotFound' }
-  /v0/external-connection-completions/feishu:
-    post:
-      tags: [External Sources]
-      operationId: completeFeishuAuthorization
-      summary: Exchange the code a returning Feishu consent page carries.
-      description: >-
-        The Feishu redirect page calls this with the state and code Feishu returned. It needs no
-        session, since the user may consent in a browser that is not signed in: the signed state
-        names the pending authorization, and its PKCE verifier binds the code to it. TeamHub stores
-        the user's tokens and checks the connection or reauthorization at once; its result arrives
-        as a connection change. FEISHU_SCOPES_MISSING lists each missing scope as a detail.
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '../components/external-sources.yaml#/components/schemas/CompleteFeishuAuthorizationRequest' }
-      responses:
-        '204':
-          description: The authorization is stored and its check is due.
-        '400': { $ref: '../components/common.yaml#/components/responses/BadRequest' }
-        '404': { $ref: '../components/common.yaml#/components/responses/NotFound' }
-        '409': { $ref: '../components/common.yaml#/components/responses/Conflict' }
-        '503': { $ref: '../components/common.yaml#/components/responses/ServiceUnavailable' }
   /v0/external-connections/{externalConnectionId}:
     parameters:
       - name: externalConnectionId

@@ -11,8 +11,9 @@ import {
 import { ConnectorError as CliError } from "./errors.js";
 
 /**
- * TeamHub runs Feishu Mail's tools itself, without Composio, and they return
- * mail already in the CLI's shape. Sending always goes through a draft, so
+ * TeamHub runs Feishu Mail's tools itself, without Composio, through the
+ * owner's own lark-cli on their Computer, and they return mail already in the
+ * CLI's shape. Sending always goes through a draft, so
  * the sponsor confirms the send of exactly what the draft holds.
  */
 export const FEISHU_MAIL_TOOLS = {

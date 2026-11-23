@@ -26,9 +26,8 @@ func TestFeishuMailCanvasIsWrittenByVoiceAndSentFromTheCard(t *testing.T) {
 	var bodies *pgxpool.Pool
 	runtime := canvasRuntime(t, &computes, replaced, func() *pgxpool.Pool { return bodies })
 	fake := newFakeFeishu(t)
-	env, alice, _, sessionID := newVoiceLiveRoomWith(t, []appOption{starting(app.JobQueue)}, func(cfg *config.Config) {
+	env, alice, _, sessionID := newVoiceLiveRoomWith(t, []appOption{starting(app.JobQueue), withAgentManagement(&recordingAgentManagement{}), withFeishuComputer(fake)}, func(cfg *config.Config) {
 		cfg.RoomDocument.RuntimeURL = runtime.URL
-		withFeishuApp(cfg, fake, 9)
 	})
 	bodies = env.pool
 	connectionID := authorizeFeishuMail(t, env, alice, fake, nil)
@@ -81,7 +80,7 @@ func TestFeishuMailCanvasIsWrittenByVoiceAndSentFromTheCard(t *testing.T) {
 	if saved["status"] != "saved" || draftID == "" {
 		t.Fatalf("save=%v", saved)
 	}
-	draft, err := feishu.ParseMessage(fake.drafts[draftID])
+	draft, err := feishu.ParseMessage(fake.draft(draftID))
 	if err != nil || !slices.Equal(draft.To, []string{"amy@example.com"}) || draft.Subject != "Wed pickup" || !strings.Contains(draft.HTML, "airport") {
 		t.Fatalf("Feishu draft=%+v err=%v", draft, err)
 	}

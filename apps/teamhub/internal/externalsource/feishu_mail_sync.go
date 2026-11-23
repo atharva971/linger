@@ -60,20 +60,19 @@ func (s *Service) fetchFeishuMailPage(ctx context.Context, upstreamID string, op
 		}
 		return nil
 	}
-	if err := before("read Feishu authorization"); err != nil {
+	if err := before("reach the Feishu mailbox"); err != nil {
 		return composio.MailImportPage{}, err
 	}
-	region, accessToken, err := s.feishuAccessToken(ctx, upstreamID, false)
+	mailbox, err := s.feishuMailbox(ctx, upstreamID)
 	if err != nil {
 		return composio.MailImportPage{}, err
 	}
-	client := s.feishu.client
 	for {
 		folder := feishuSyncFolders[cursor.Folder]
 		if err = before("list Feishu mail"); err != nil {
 			return composio.MailImportPage{}, err
 		}
-		ids, next, err := client.ListMessageIDs(ctx, region, accessToken, folder, false, min(options.Limit, 20), cursor.Token)
+		ids, next, err := mailbox.ListMessageIDs(ctx, folder, false, min(options.Limit, 20), cursor.Token)
 		if err != nil {
 			return composio.MailImportPage{}, err
 		}
@@ -82,7 +81,7 @@ func (s *Service) fetchFeishuMailPage(ctx context.Context, upstreamID string, op
 			if err = before("read Feishu mail"); err != nil {
 				return composio.MailImportPage{}, err
 			}
-			if messages, err = client.BatchGetMessages(ctx, region, accessToken, ids, "full"); err != nil {
+			if messages, err = mailbox.BatchGetMessages(ctx, ids, "full"); err != nil {
 				return composio.MailImportPage{}, err
 			}
 		}
@@ -169,18 +168,18 @@ func (s *Service) FeishuInboxSince(ctx context.Context, upstreamID string, since
 	if s.feishu == nil {
 		return nil, ErrUnavailable
 	}
-	region, accessToken, err := s.feishuAccessToken(ctx, upstreamID, false)
+	mailbox, err := s.feishuMailbox(ctx, upstreamID)
 	if err != nil {
 		return nil, err
 	}
 	var found []reminder.FeishuInboxMessage
 	token := ""
 	for range feishuListenerPages {
-		ids, next, err := s.feishu.client.ListMessageIDs(ctx, region, accessToken, feishu.FolderInbox, false, 20, token)
+		ids, next, err := mailbox.ListMessageIDs(ctx, feishu.FolderInbox, false, 20, token)
 		if err != nil {
 			return nil, err
 		}
-		messages, err := s.feishu.client.BatchGetMessages(ctx, region, accessToken, ids, "full")
+		messages, err := mailbox.BatchGetMessages(ctx, ids, "full")
 		if err != nil {
 			return nil, err
 		}

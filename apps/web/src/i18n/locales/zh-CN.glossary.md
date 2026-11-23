@@ -20,7 +20,7 @@ elsewhere.
 | Base URL, tokens, Dense, MoE         | Model terms people meet in provider documentation. |
 | Local Computer                       | Only when it names the background program.         |
 | Read All, Write All                  | Permission names in Composio's dashboard.          |
-| Lark, offline_access                 | Names in the Lark and Feishu developer consoles.   |
+| Lark, lark-cli                       | Names in the Lark and Feishu developer tools.      |
 | Issue                                | Linear's word for a work item.                     |
 
 ## Translated

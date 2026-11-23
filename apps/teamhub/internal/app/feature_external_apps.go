@@ -12,7 +12,6 @@ import (
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/composio"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/config"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/externalsource"
-	"github.com/simplexai-labs/linger/apps/teamhub/internal/feishu"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/proactive"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/reminder"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/secretbox"
@@ -55,10 +54,10 @@ func (a *App) registerExternalApps(ctx context.Context, cfg config.ExternalAppsC
 	if err = sources.ConfigureManagedApps(ctx, client, keyBox); err != nil {
 		return fmt.Errorf("configure managed connected apps: %w", err)
 	}
-	sources.ConfigureFeishu(feishu.New(feishu.Config{
-		BaseURL: cfg.FeishuBaseURL, HTTPClient: &http.Client{Timeout: config.ExternalSourceRequestTimeout},
-	}), client, feishu.App{Region: feishu.Region(cfg.FeishuAppRegion), ID: cfg.FeishuAppID, Secret: cfg.FeishuAppSecret},
-		keyBox, a.signingKey, externalsource.FeishuRedirectURL(a.cfg.PublicWebURL))
+	// Feishu Mail runs through each owner's lark-cli on their Computer.
+	if computer, ok := a.localComputers.(externalsource.FeishuComputer); ok {
+		sources.ConfigureFeishu(computer, client, &http.Client{Timeout: config.ExternalSourceRequestTimeout})
+	}
 	a.externalSources = sources
 	a.agentConnectedApps = agentconnectedapps.New(a.pool, agentAuthorization, sources,
 		agentconnectedapps.WithNativeToolkit(client, sources.FeishuMailTools()))
@@ -89,7 +88,7 @@ func (a *App) addExternalAppJobs(features *featureSet, appListeners bool) {
 }
 
 // connectionProvidersConfigured reports whether any connection provider works
-// now: Composio, or the Feishu custom app. Connection lifecycle jobs run
+// now: Composio, or Feishu Mail through owners' Computers. Connection lifecycle jobs run
 // while either does.
 func (a *App) connectionProvidersConfigured() bool {
 	return a.externalSources != nil && a.externalSources.ConnectionProvidersConfigured()

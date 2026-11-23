@@ -5302,14 +5302,6 @@ type CompleteExternalConnectionAuthorizationRequest struct {
 	ConnectedAccountId *string `json:"connected_account_id,omitempty"`
 }
 
-// CompleteFeishuAuthorizationRequest defines model for CompleteFeishuAuthorizationRequest.
-type CompleteFeishuAuthorizationRequest struct {
-	Code string `json:"code"`
-
-	// State The state Feishu returned to the redirect page, as TeamHub issued it.
-	State string `json:"state"`
-}
-
 // ComputerPermissionAction One step the owner takes on their own Mac. prompt raises the macOS prompt, open_settings opens the System Settings pane, and relaunch restarts the Linger desktop app so a new grant takes effect.
 type ComputerPermissionAction struct {
 	Action ComputerPermissionActionAction `json:"action"`
@@ -10691,9 +10683,6 @@ type SaveExternalProviderKeyJSONRequestBody = SaveExternalProviderKeyRequest
 
 // CompleteExternalConnectionAuthorizationJSONRequestBody defines body for CompleteExternalConnectionAuthorization for application/json ContentType.
 type CompleteExternalConnectionAuthorizationJSONRequestBody = CompleteExternalConnectionAuthorizationRequest
-
-// CompleteFeishuAuthorizationJSONRequestBody defines body for CompleteFeishuAuthorization for application/json ContentType.
-type CompleteFeishuAuthorizationJSONRequestBody = CompleteFeishuAuthorizationRequest
 
 // CreateExternalConnectionJSONRequestBody defines body for CreateExternalConnection for application/json ContentType.
 type CreateExternalConnectionJSONRequestBody = CreateExternalConnectionRequest

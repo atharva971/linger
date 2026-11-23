@@ -20,6 +20,15 @@ export interface AppGroup {
  * is added to a group. Group names avoid product nouns such as Profile, Chats,
  * Docs, Projects and Sources.
  */
+/**
+ * Apps a person shares only with their AnotherMe, by asking it in chat. Their
+ * accounts show in AnotherMe's connectors and never on the Connectors page,
+ * not even under Connected; its `?app=` dialog still manages them.
+ */
+export const ANOTHER_ME_ONLY_APPS: ReadonlySet<string> = new Set([
+  "feishu_mail",
+]);
+
 /** The Connectors tab for web search, beside the Composio app groups. */
 export const WEB_SEARCH_FILTER = {
   id: "web-search",

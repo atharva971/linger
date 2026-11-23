@@ -196,8 +196,9 @@ func connectionCheckErrorClass(err error) string {
 	if status, ok := composio.ErrorStatus(err); ok {
 		return "http_" + strconv.Itoa(status)
 	}
-	if status, ok := feishu.ErrorStatus(err); ok {
-		return "http_" + strconv.Itoa(status)
+	var computer *feishu.ComputerError
+	if errors.As(err, &computer) {
+		return computer.Status
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {

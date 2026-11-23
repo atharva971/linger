@@ -119,19 +119,12 @@ func (FeishuMailTools) GetTool(_ context.Context, slug, _ string) (composio.Tool
 	return tool, nil
 }
 
-// ConnectionStatus reports whether the upstream's authorization works now.
-func (t FeishuMailTools) ConnectionStatus(ctx context.Context, upstreamID string) (composio.ConnectionStatus, error) {
-	_, _, err := t.service.feishuAccessToken(ctx, upstreamID, false)
-	switch {
-	case err == nil:
-		return composio.ConnectionActive, nil
-	case errors.Is(err, errFeishuNotAuthorized):
-		return composio.ConnectionPending, nil
-	case errors.Is(err, errFeishuAppChanged) || feishu.IsAuthFailure(err):
-		return composio.ConnectionExpired, nil
-	default:
-		return "", err
-	}
+// ConnectionStatus reports an Agent's active connection as active without a
+// Computer call, which would add a lark-cli run to every tool call: the
+// connection's own checks follow the owner's login, and a call that finds it
+// broken fails as not active.
+func (FeishuMailTools) ConnectionStatus(context.Context, string) (composio.ConnectionStatus, error) {
+	return composio.ConnectionActive, nil
 }
 
 // ExecuteTool runs one call. Malformed arguments fail with ErrInvalid before
@@ -141,22 +134,26 @@ func (t FeishuMailTools) ExecuteTool(ctx context.Context, upstreamID, slug, vers
 	if !t.Owns(slug) || version != FeishuMailToolVersion {
 		return composio.ToolExecution{}, ErrNotFound
 	}
-	region, accessToken, err := t.service.feishuAccessToken(ctx, upstreamID, false)
-	if errors.Is(err, errFeishuAppChanged) || errors.Is(err, errFeishuNotAuthorized) || feishu.IsAuthFailure(err) {
-		// Nothing reached the mailbox: the authorization no longer works.
-		return composio.ToolExecution{}, errors.Join(ErrNotActive, err)
+	var data map[string]any
+	mailbox, err := t.service.feishuMailbox(ctx, upstreamID)
+	if err == nil {
+		call := feishuMailCall{service: t.service, mailbox: mailbox, upstreamID: upstreamID, args: arguments}
+		data, err = call.run(ctx, slug)
 	}
-	if err != nil {
-		return composio.ToolExecution{}, err
-	}
-	call := feishuMailCall{service: t.service, client: t.service.feishu.client, region: region, token: accessToken, upstreamID: upstreamID, args: arguments}
-	data, err := call.run(ctx, slug)
 	var apiErr *feishu.APIError
+	var computer *feishu.ComputerError
 	switch {
 	case err == nil:
 		return composio.ToolExecution{Successful: true, Data: data}, nil
-	case errors.As(err, &apiErr) && !feishu.IsAuthFailure(err) && apiErr.HTTPStatus < 500:
+	case feishu.IsAuthFailure(err):
+		// lark-cli refused before Feishu acted: the owner's login no longer works.
+		return composio.ToolExecution{}, errors.Join(ErrNotActive, err)
+	case errors.As(err, &apiErr):
 		return refusal(fmt.Sprintf("Feishu refused the call (code %d): %s", apiErr.Code, apiErr.Message)), nil
+	case errors.As(err, &computer) && computer.Status == feishu.StatusNotInstalled:
+		return refusal("lark-cli is not installed on the Computer that runs your Another Me. Install it, sign in, and try again."), nil
+	case errors.As(err, &computer) && computer.Status == feishu.StatusComputerOffline:
+		return refusal("Feishu Mail runs through lark-cli on the Computer that runs your Another Me, and that Computer is offline."), nil
 	case errors.Is(err, feishu.ErrSendDisabled), errors.Is(err, feishu.ErrAttachmentTooLarge), errors.Is(err, feishu.ErrMalformedMessage):
 		return refusal(err.Error()), nil
 	default:
@@ -171,9 +168,7 @@ func refusal(reason string) composio.ToolExecution {
 
 type feishuMailCall struct {
 	service    *Service
-	client     *feishu.Client
-	region     feishu.Region
-	token      string
+	mailbox    feishu.Mailbox
 	upstreamID string
 	args       map[string]any
 }
@@ -183,7 +178,7 @@ func (c feishuMailCall) run(ctx context.Context, slug string) (map[string]any, e
 	case FeishuMailListMessages:
 		return c.list(ctx)
 	case FeishuMailGetMessage:
-		message, err := c.client.GetMessage(ctx, c.region, c.token, c.str("message_id"))
+		message, err := c.mailbox.GetMessage(ctx, c.str("message_id"))
 		if err != nil {
 			return nil, err
 		}
@@ -193,7 +188,7 @@ func (c feishuMailCall) run(ctx context.Context, slug string) (map[string]any, e
 	case FeishuMailGetDraft:
 		return c.draft(ctx)
 	case FeishuMailGetAttach:
-		data, err := c.client.DownloadAttachment(ctx, c.region, c.token, c.str("message_id"), c.str("attachment_id"))
+		data, err := c.mailbox.DownloadAttachment(ctx, c.str("message_id"), c.str("attachment_id"))
 		if err != nil {
 			return nil, err
 		}
@@ -203,13 +198,13 @@ func (c feishuMailCall) run(ctx context.Context, slug string) (map[string]any, e
 	case FeishuMailUpdateDraft:
 		return c.updateDraft(ctx)
 	case FeishuMailSendDraft:
-		messageID, threadID, err := c.client.SendDraft(ctx, c.region, c.token, c.str("draft_id"))
+		messageID, threadID, err := c.mailbox.SendDraft(ctx, c.str("draft_id"))
 		if err != nil {
 			return nil, err
 		}
 		return withoutEmpty(map[string]any{"draft_id": c.str("draft_id"), "message_id": messageID, "thread_id": threadID}), nil
 	default:
-		if err := c.client.MoveMessages(ctx, c.region, c.token, []string{c.str("message_id")}, feishu.FolderArchived); err != nil {
+		if err := c.mailbox.MoveMessages(ctx, []string{c.str("message_id")}, feishu.FolderArchived); err != nil {
 			return nil, err
 		}
 		return map[string]any{"message_id": c.str("message_id")}, nil
@@ -225,18 +220,18 @@ func (c feishuMailCall) list(ctx context.Context) (map[string]any, error) {
 	var err error
 	if query != "" {
 		searchFolder := map[string]string{"inbox": "inbox", "sent": "sent"}[folder]
-		ids, next, err = c.client.SearchMessageIDs(ctx, c.region, c.token, query, searchFolder, unread, min(pageSize, 15), c.str("page_token"))
+		ids, next, err = c.mailbox.SearchMessageIDs(ctx, query, searchFolder, unread, min(pageSize, 15), c.str("page_token"))
 	} else {
 		folderID := map[string]string{"inbox": feishu.FolderInbox, "sent": feishu.FolderSent}[folder]
 		if folderID == "" {
 			return nil, errors.Join(ErrInvalid, errors.New("Feishu lists one folder at a time"))
 		}
-		ids, next, err = c.client.ListMessageIDs(ctx, c.region, c.token, folderID, unread, pageSize, c.str("page_token"))
+		ids, next, err = c.mailbox.ListMessageIDs(ctx, folderID, unread, pageSize, c.str("page_token"))
 	}
 	if err != nil {
 		return nil, err
 	}
-	messages, err := c.client.BatchGetMessages(ctx, c.region, c.token, ids, "metadata")
+	messages, err := c.mailbox.BatchGetMessages(ctx, ids, "metadata")
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +245,7 @@ func (c feishuMailCall) list(ctx context.Context) (map[string]any, error) {
 // thread pages through a thread oldest first; Feishu returns it whole, so
 // the page token is an offset.
 func (c feishuMailCall) thread(ctx context.Context) (map[string]any, error) {
-	messages, err := c.client.ThreadMessages(ctx, c.region, c.token, c.str("thread_id"))
+	messages, err := c.mailbox.ThreadMessages(ctx, c.str("thread_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +273,7 @@ func (c feishuMailCall) thread(ctx context.Context) (map[string]any, error) {
 }
 
 func (c feishuMailCall) draft(ctx context.Context) (map[string]any, error) {
-	raw, messageID, err := c.client.GetDraft(ctx, c.region, c.token, c.str("draft_id"))
+	raw, messageID, err := c.mailbox.GetDraft(ctx, c.str("draft_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +297,7 @@ func (c feishuMailCall) draft(ctx context.Context) (map[string]any, error) {
 func (c feishuMailCall) createDraft(ctx context.Context) (map[string]any, error) {
 	message := feishu.Message{}
 	if replyTo := c.str("reply_to_message_id"); replyTo != "" {
-		original, err := c.client.GetMessage(ctx, c.region, c.token, replyTo)
+		original, err := c.mailbox.GetMessage(ctx, replyTo)
 		if err != nil {
 			return nil, err
 		}
@@ -319,7 +314,7 @@ func (c feishuMailCall) createDraft(ctx context.Context) (map[string]any, error)
 	if err != nil {
 		return nil, err
 	}
-	draftID, err := c.client.CreateDraft(ctx, c.region, c.token, raw)
+	draftID, err := c.mailbox.CreateDraft(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +323,7 @@ func (c feishuMailCall) createDraft(ctx context.Context) (map[string]any, error)
 
 func (c feishuMailCall) updateDraft(ctx context.Context) (map[string]any, error) {
 	draftID := c.str("draft_id")
-	raw, _, err := c.client.GetDraft(ctx, c.region, c.token, draftID)
+	raw, _, err := c.mailbox.GetDraft(ctx, draftID)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +337,7 @@ func (c feishuMailCall) updateDraft(ctx context.Context) (map[string]any, error)
 	if raw, err = feishu.BuildMessage(message); err != nil {
 		return nil, err
 	}
-	if err = c.client.UpdateDraft(ctx, c.region, c.token, draftID, raw); err != nil {
+	if err = c.mailbox.UpdateDraft(ctx, draftID, raw); err != nil {
 		return nil, err
 	}
 	return map[string]any{"draft_id": draftID}, nil
@@ -541,23 +536,23 @@ func (c feishuMailCall) integer(name string, fallback int) int {
 // SaveFeishuDraft saves raw, a whole message, as a new draft, or replaces
 // draftID with it, and returns the draft's ID. It never sends.
 func (s *Service) SaveFeishuDraft(ctx context.Context, upstreamID, draftID string, raw []byte) (string, error) {
-	region, accessToken, err := s.feishuAccessToken(ctx, upstreamID, false)
+	mailbox, err := s.feishuMailbox(ctx, upstreamID)
 	if err != nil {
 		return "", err
 	}
 	if draftID == "" {
-		return s.feishu.client.CreateDraft(ctx, region, accessToken, raw)
+		return mailbox.CreateDraft(ctx, raw)
 	}
-	return draftID, s.feishu.client.UpdateDraft(ctx, region, accessToken, draftID, raw)
+	return draftID, mailbox.UpdateDraft(ctx, draftID, raw)
 }
 
 // SendFeishuDraft sends a saved draft now and returns the sent message's ID.
 func (s *Service) SendFeishuDraft(ctx context.Context, upstreamID, draftID string) (string, error) {
-	region, accessToken, err := s.feishuAccessToken(ctx, upstreamID, false)
+	mailbox, err := s.feishuMailbox(ctx, upstreamID)
 	if err != nil {
 		return "", err
 	}
-	messageID, _, err := s.feishu.client.SendDraft(ctx, region, accessToken, draftID)
+	messageID, _, err := mailbox.SendDraft(ctx, draftID)
 	return messageID, err
 }
 

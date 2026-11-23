@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 )
 
@@ -67,22 +66,14 @@ var ErrSendDisabled = errors.New("Feishu did not send the draft")
 // MaxAttachmentBytes bounds one attachment TeamHub downloads for an Agent.
 const MaxAttachmentBytes = 25 << 20
 
-func (c *Client) mailURL(region Region, path string, query url.Values) string {
-	endpoint := c.endpoints(region).open + "/open-apis/mail/v1/user_mailboxes/me/" + path
-	if len(query) > 0 {
-		endpoint += "?" + query.Encode()
-	}
-	return endpoint
-}
-
 // ListMessageIDs lists one folder newest first, as message IDs.
-func (c *Client) ListMessageIDs(ctx context.Context, region Region, accessToken, folderID string, onlyUnread bool, pageSize int, pageToken string) ([]string, string, error) {
-	query := url.Values{"page_size": {strconv.Itoa(pageSize)}, "folder_id": {folderID}}
+func (m Mailbox) ListMessageIDs(ctx context.Context, folderID string, onlyUnread bool, pageSize int, pageToken string) ([]string, string, error) {
+	query := map[string]any{"page_size": pageSize, "folder_id": folderID}
 	if onlyUnread {
-		query.Set("only_unread", "true")
+		query["only_unread"] = true
 	}
 	if pageToken != "" {
-		query.Set("page_token", pageToken)
+		query["page_token"] = pageToken
 	}
 	var response struct {
 		Data struct {
@@ -91,7 +82,7 @@ func (c *Client) ListMessageIDs(ctx context.Context, region Region, accessToken,
 			PageToken string   `json:"page_token"`
 		} `json:"data"`
 	}
-	if err := c.call(ctx, "message list", http.MethodGet, c.mailURL(region, "messages", query), accessToken, nil, &response); err != nil {
+	if err := m.do(ctx, "message list", http.MethodGet, "messages", query, nil, &response); err != nil {
 		return nil, "", err
 	}
 	return response.Data.Items, nextToken(response.Data.HasMore, response.Data.PageToken), nil
@@ -99,10 +90,10 @@ func (c *Client) ListMessageIDs(ctx context.Context, region Region, accessToken,
 
 // SearchMessageIDs searches the mailbox; folder is a lowercase folder name or
 // empty for every folder.
-func (c *Client) SearchMessageIDs(ctx context.Context, region Region, accessToken, text, folder string, onlyUnread bool, pageSize int, pageToken string) ([]string, string, error) {
-	query := url.Values{"page_size": {strconv.Itoa(pageSize)}}
+func (m Mailbox) SearchMessageIDs(ctx context.Context, text, folder string, onlyUnread bool, pageSize int, pageToken string) ([]string, string, error) {
+	query := map[string]any{"page_size": pageSize}
 	if pageToken != "" {
-		query.Set("page_token", pageToken)
+		query["page_token"] = pageToken
 	}
 	filter := map[string]any{}
 	if folder != "" {
@@ -122,7 +113,7 @@ func (c *Client) SearchMessageIDs(ctx context.Context, region Region, accessToke
 			PageToken string `json:"page_token"`
 		} `json:"data"`
 	}
-	if err := c.call(ctx, "message search", http.MethodPost, c.mailURL(region, "search", query), accessToken, map[string]any{"query": text, "filter": filter}, &response); err != nil {
+	if err := m.do(ctx, "message search", http.MethodPost, "search", query, map[string]any{"query": text, "filter": filter}, &response); err != nil {
 		return nil, "", err
 	}
 	ids := make([]string, 0, len(response.Data.Items))
@@ -136,7 +127,7 @@ func (c *Client) SearchMessageIDs(ctx context.Context, region Region, accessToke
 
 // BatchGetMessages reads up to 20 messages in format, in the order of ids;
 // Feishu returns them in any order.
-func (c *Client) BatchGetMessages(ctx context.Context, region Region, accessToken string, ids []string, format string) ([]MailMessage, error) {
+func (m Mailbox) BatchGetMessages(ctx context.Context, ids []string, format string) ([]MailMessage, error) {
 	if len(ids) == 0 {
 		return []MailMessage{}, nil
 	}
@@ -145,7 +136,7 @@ func (c *Client) BatchGetMessages(ctx context.Context, region Region, accessToke
 			Messages []MailMessage `json:"messages"`
 		} `json:"data"`
 	}
-	if err := c.call(ctx, "message batch read", http.MethodPost, c.mailURL(region, "messages/batch_get", nil), accessToken, map[string]any{"format": format, "message_ids": ids}, &response); err != nil {
+	if err := m.do(ctx, "message batch read", http.MethodPost, "messages/batch_get", nil, map[string]any{"format": format, "message_ids": ids}, &response); err != nil {
 		return nil, err
 	}
 	byID := make(map[string]MailMessage, len(response.Data.Messages))
@@ -162,18 +153,18 @@ func (c *Client) BatchGetMessages(ctx context.Context, region Region, accessToke
 }
 
 // GetMessage reads one message with its bodies.
-func (c *Client) GetMessage(ctx context.Context, region Region, accessToken, messageID string) (MailMessage, error) {
+func (m Mailbox) GetMessage(ctx context.Context, messageID string) (MailMessage, error) {
 	var response struct {
 		Data struct {
 			Message MailMessage `json:"message"`
 		} `json:"data"`
 	}
-	err := c.call(ctx, "message read", http.MethodGet, c.mailURL(region, "messages/"+url.PathEscape(messageID), url.Values{"format": {"full"}}), accessToken, nil, &response)
+	err := m.do(ctx, "message read", http.MethodGet, "messages/"+url.PathEscape(messageID), map[string]any{"format": "full"}, nil, &response)
 	return response.Data.Message, err
 }
 
 // ThreadMessages reads every message of a thread with its bodies.
-func (c *Client) ThreadMessages(ctx context.Context, region Region, accessToken, threadID string) ([]MailMessage, error) {
+func (m Mailbox) ThreadMessages(ctx context.Context, threadID string) ([]MailMessage, error) {
 	var response struct {
 		Data struct {
 			Thread struct {
@@ -181,13 +172,13 @@ func (c *Client) ThreadMessages(ctx context.Context, region Region, accessToken,
 			} `json:"thread"`
 		} `json:"data"`
 	}
-	err := c.call(ctx, "thread read", http.MethodGet, c.mailURL(region, "threads/"+url.PathEscape(threadID), url.Values{"format": {"full"}}), accessToken, nil, &response)
+	err := m.do(ctx, "thread read", http.MethodGet, "threads/"+url.PathEscape(threadID), map[string]any{"format": "full"}, nil, &response)
 	return response.Data.Thread.Messages, err
 }
 
 // DownloadAttachment returns one attachment's bytes. Feishu hands out a
-// presigned URL, fetched without the user's token.
-func (c *Client) DownloadAttachment(ctx context.Context, region Region, accessToken, messageID, attachmentID string) ([]byte, error) {
+// presigned URL, which TeamHub fetches itself: it needs no login.
+func (m Mailbox) DownloadAttachment(ctx context.Context, messageID, attachmentID string) ([]byte, error) {
 	var response struct {
 		Data struct {
 			DownloadURLs []struct {
@@ -197,7 +188,7 @@ func (c *Client) DownloadAttachment(ctx context.Context, region Region, accessTo
 		} `json:"data"`
 	}
 	path := "messages/" + url.PathEscape(messageID) + "/attachments/download_url"
-	if err := c.call(ctx, "attachment link", http.MethodGet, c.mailURL(region, path, url.Values{"attachment_ids": {attachmentID}}), accessToken, nil, &response); err != nil {
+	if err := m.do(ctx, "attachment link", http.MethodGet, path, map[string]any{"attachment_ids": []string{attachmentID}}, nil, &response); err != nil {
 		return nil, err
 	}
 	link := ""
@@ -207,21 +198,20 @@ func (c *Client) DownloadAttachment(ctx context.Context, region Region, accessTo
 		}
 	}
 	parsed, err := url.Parse(link)
-	// Tests serve the link from a plain-HTTP fake Open Platform.
-	if link == "" || err != nil || parsed.Scheme != "https" && c.baseURL == "" {
+	if link == "" || err != nil || parsed.Scheme != "https" {
 		return nil, errors.New("Feishu returned no usable attachment link")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
 	if err != nil {
 		return nil, err
 	}
-	response2, err := c.http.Do(request)
+	response2, err := m.downloads.Do(request)
 	if err != nil {
 		return nil, err
 	}
 	defer response2.Body.Close()
 	if response2.StatusCode != http.StatusOK {
-		return nil, &APIError{Operation: "attachment download", HTTPStatus: response2.StatusCode}
+		return nil, fmt.Errorf("Feishu attachment download answered HTTP %d", response2.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(response2.Body, MaxAttachmentBytes+1))
 	if err != nil {
@@ -246,9 +236,9 @@ type draftResponse struct {
 }
 
 // CreateDraft saves raw, a whole RFC 5322 message, as a new draft.
-func (c *Client) CreateDraft(ctx context.Context, region Region, accessToken string, raw []byte) (string, error) {
+func (m Mailbox) CreateDraft(ctx context.Context, raw []byte) (string, error) {
 	var response draftResponse
-	if err := c.call(ctx, "draft create", http.MethodPost, c.mailURL(region, "drafts", nil), accessToken, map[string]string{"raw": base64.URLEncoding.EncodeToString(raw)}, &response); err != nil {
+	if err := m.do(ctx, "draft create", http.MethodPost, "drafts", nil, map[string]string{"raw": base64.URLEncoding.EncodeToString(raw)}, &response); err != nil {
 		return "", err
 	}
 	if response.Data.Draft.ID == "" {
@@ -258,14 +248,14 @@ func (c *Client) CreateDraft(ctx context.Context, region Region, accessToken str
 }
 
 // UpdateDraft replaces the whole draft with raw.
-func (c *Client) UpdateDraft(ctx context.Context, region Region, accessToken, draftID string, raw []byte) error {
-	return c.call(ctx, "draft update", http.MethodPut, c.mailURL(region, "drafts/"+url.PathEscape(draftID), nil), accessToken, map[string]string{"raw": base64.URLEncoding.EncodeToString(raw)}, nil)
+func (m Mailbox) UpdateDraft(ctx context.Context, draftID string, raw []byte) error {
+	return m.do(ctx, "draft update", http.MethodPut, "drafts/"+url.PathEscape(draftID), nil, map[string]string{"raw": base64.URLEncoding.EncodeToString(raw)}, nil)
 }
 
 // GetDraft reads a draft as its whole message, and its message ID.
-func (c *Client) GetDraft(ctx context.Context, region Region, accessToken, draftID string) ([]byte, string, error) {
+func (m Mailbox) GetDraft(ctx context.Context, draftID string) ([]byte, string, error) {
 	var response draftResponse
-	if err := c.call(ctx, "draft read", http.MethodGet, c.mailURL(region, "drafts/"+url.PathEscape(draftID), url.Values{"format": {"raw"}}), accessToken, nil, &response); err != nil {
+	if err := m.do(ctx, "draft read", http.MethodGet, "drafts/"+url.PathEscape(draftID), map[string]any{"format": "raw"}, nil, &response); err != nil {
 		return nil, "", err
 	}
 	raw, err := DecodeBase64URL(response.Data.Draft.Message.Raw)
@@ -276,7 +266,7 @@ func (c *Client) GetDraft(ctx context.Context, region Region, accessToken, draft
 }
 
 // SendDraft sends a draft now and returns the sent message's IDs.
-func (c *Client) SendDraft(ctx context.Context, region Region, accessToken, draftID string) (string, string, error) {
+func (m Mailbox) SendDraft(ctx context.Context, draftID string) (string, string, error) {
 	var response struct {
 		Data struct {
 			MessageID             string `json:"message_id"`
@@ -286,7 +276,7 @@ func (c *Client) SendDraft(ctx context.Context, region Region, accessToken, draf
 			} `json:"automation_send_disable"`
 		} `json:"data"`
 	}
-	if err := c.call(ctx, "draft send", http.MethodPost, c.mailURL(region, "drafts/"+url.PathEscape(draftID)+"/send", nil), accessToken, map[string]any{}, &response); err != nil {
+	if err := m.do(ctx, "draft send", http.MethodPost, "drafts/"+url.PathEscape(draftID)+"/send", nil, map[string]any{}, &response); err != nil {
 		return "", "", err
 	}
 	if disabled := response.Data.AutomationSendDisable; disabled != nil {
@@ -296,8 +286,8 @@ func (c *Client) SendDraft(ctx context.Context, region Region, accessToken, draf
 }
 
 // MoveMessages moves messages to a folder, such as FolderArchived.
-func (c *Client) MoveMessages(ctx context.Context, region Region, accessToken string, messageIDs []string, folderID string) error {
-	return c.call(ctx, "message move", http.MethodPost, c.mailURL(region, "messages/batch_modify", nil), accessToken, map[string]any{"message_ids": messageIDs, "add_folder": folderID}, nil)
+func (m Mailbox) MoveMessages(ctx context.Context, messageIDs []string, folderID string) error {
+	return m.do(ctx, "message move", http.MethodPost, "messages/batch_modify", nil, map[string]any{"message_ids": messageIDs, "add_folder": folderID}, nil)
 }
 
 // DecodeBase64URL decodes the base64url Feishu uses, with or without padding.

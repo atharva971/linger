@@ -277,7 +277,7 @@ func connectionIdentityFailurePolicy(provider string, err error) (code string, r
 	if errors.As(err, &feishuLimited) {
 		return "provider_rate_limited", max(time.Minute, feishuLimited.RetryAfter), false
 	}
-	if feishu.IsAuthFailure(err) || errors.Is(err, errFeishuAppChanged) {
+	if feishu.IsAuthFailure(err) {
 		return "provider_auth_failed", 6 * time.Hour, true
 	}
 	if provider == "discord" && errors.Is(err, composio.ErrDiscordGuildRequired) {

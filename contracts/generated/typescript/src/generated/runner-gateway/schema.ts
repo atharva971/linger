@@ -5770,7 +5770,7 @@ export const runnerGatewayEnvelopeSchema = {
           $ref: "#/$defs/Id",
         },
         server: {
-          enum: ["browser", "playground"],
+          enum: ["browser", "playground", "feishu_mail"],
         },
         tool_name: {
           type: "string",
