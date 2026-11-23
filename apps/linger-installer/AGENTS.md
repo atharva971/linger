@@ -30,6 +30,13 @@ on stderr for the desktop to show.
 Native sign-in sessions belong to an instance and its selected runtime. A changed
 setup choice must not reuse another runtime's URL or accept a code for its process;
 starting sign-in for the new runtime stops the previous runtime's pending login.
+A Codex start may name its login method: `browser` (localhost callback; on
+Linux it runs with `BROWSER=true` so only the caller opens the link, elsewhere
+the CLI opens its own page) or `device` (device code).
+Without one, macOS and Windows use the browser login, which opens its own
+page, and other platforms the device code. A start with another method replaces
+the running login. A failed login carries its `reason`; a timeout stays
+`timed_out` after the process exits.
 
 `--resume` (native source with `--instance`) starts an installed instance's
 stopped services headless, reusing its saved choices; the desktop client runs it
@@ -48,23 +55,36 @@ runtime (the local model, for one) is ready, and a run that stops earlier
 leaves the running services and their schema as they were. A successful
 outcome's `details.source` names the checkout the services serve from, and
 `details.origin` the origin they serve at, which the run moves when another
-program took the web port. A
-local model stack whose saved binding is no longer ready (any setup binding
-reason, `pi-extensions-unavailable` from a Pi an earlier localmodels
-installed without extension support included) gets its approved plan applied
-again when the saved plan inputs still match the current choices; only a
-plan the person approved is ever applied, and a stack still not ready ends
+program took the web port. A local model stack whose saved binding is no longer ready and whose saved plan
+inputs still match starts in place with `stack up` first when the binding
+reports a stopped deployment or gateway (`deployment-unavailable` or
+`gateway-unavailable`), so upgrades across `localmodels` kits or retired
+catalog models keep the installed stack running without re-planning; it falls
+back to applying the approved plan again when `stack up` fails or another
+binding reason (such as `pi-extensions-unavailable` from a Pi an earlier
+localmodels installed without extension support) remains. Only a plan the
+person approved is ever applied, and a stack still not ready ends
 `LOCAL_MODELS_RECOVERY_REQUIRED` with the binding's reason codes in
-`details.reasons`. When the services already run, a local-models setup
-whose Computer still uses the local model source (`model-source.json` says
-`local` or does not exist yet) has its stack checked once
-(`restoreLocalModels`), since a quit stops the models but not the services: a
-stack that is not ready gets the same restore, then becomes the model source
-again. A source switched to a subscription or BYOK leaves the stack stopped;
-a saved BYOK source gets its Bifrost gateway mounted again from the saved
-configuration unless it already answers (`restoreByokSource`), and a failure
-is logged and reported in the ready outcome's `details.byokGateway`
-without failing the resume.
+`details.reasons` (exposed on jobs as `errorReasons`) and any upstream stack
+guard or plan error code in `details.causeCode` (exposed on jobs as
+`errorCauseCode`). When the services already run, a setup whose
+Computer uses the local model source (`model-source.json` says `local`, or does
+not exist yet on a `local-models` setup) has its stack and saved library model
+checked (`restoreLocalModels`), since a quit stops the models but not the
+services: a stack that is not ready gets the same restore, an unloaded saved
+`localmodels-library/` model is reloaded, and the local source is applied again;
+if that restore fails or throws (or a same-checkout cold resume cannot prepare
+the local model stack or reload its saved library model), the failure is logged
+and reported in the ready outcome's `details.localModelsDegraded` without
+failing the resume, so the person can still reach the workspace and the Models
+page. Resource-choice mismatches omit stale binding reason codes so Quick
+Install still triggers a replan. Both same-version resume (`restoreLocalModels`)
+and version upgrades from the saved setup choice leave the stack stopped when
+`model-source.json` was switched to `subscription` or `byok`; a saved BYOK
+source gets its Bifrost gateway mounted again from the saved configuration
+unless it already answers (`restoreByokSource`), and a failure is logged and
+reported in the ready outcome's `details.byokGateway` without failing the
+resume; the Computer mounts it again before the next Run on it.
 A failed installation records the stage that caused it, even when native
 checkout preparation and runtime setup ran in parallel. A BYOK mount failure
 belongs to runtime and keeps the redacted provider error in the job.

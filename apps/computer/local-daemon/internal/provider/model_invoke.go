@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,13 +59,14 @@ const (
 )
 
 // codexInvokeDisabledFeatures turns off every Codex tool family a one-shot
-// call must not reach: shell and code execution, sub-agents, goals, browsers,
-// computer use, connected apps, plugins, hooks, image tools, tool discovery,
-// Skills and sleeping. Each name is passed as a features.<name>=false config
-// override rather than --disable so older Codex releases ignore features they
-// do not define instead of refusing to start.
+// call must not reach: shell and code execution, goals, browsers, computer
+// use, connected apps, plugins, hooks, image tools, tool discovery, Skills and
+// sleeping. Each name is passed as a features.<name>=false config override
+// rather than --disable so older Codex releases ignore features they do not
+// define instead of refusing to start. native.CodexSubAgentConfig turns off
+// sub-agents.
 var codexInvokeDisabledFeatures = []string{
-	"shell_tool", "unified_exec", "code_mode_host", "multi_agent", "goals",
+	"shell_tool", "unified_exec", "code_mode_host", "goals",
 	"browser_use", "browser_use_external", "browser_use_full_cdp_access",
 	"computer_use", "in_app_browser", "apps", "plugins", "hooks",
 	"image_generation", "view_image", "tool_suggest", "skill_search", "sleep_tool",
@@ -106,6 +108,9 @@ type ModelInvokeRuntime struct {
 	ExecutablePath string
 	Environment    map[string]string
 	Version        string
+	// DefaultModel is the model the Runtime's own catalog marks as its
+	// default for the signed-in account; empty when it marks none.
+	DefaultModel string
 }
 
 // ModelInvokeFile is one workspace file, relative to the working directory.
@@ -262,7 +267,7 @@ func (m ModelInvoker) invoke(ctx context.Context, request ModelInvokeRequest, in
 	environment := modelInvokeEnvironment(installed.Environment, scratch)
 	var invocation modelInvocation
 	if request.RuntimeType == "codex" {
-		invocation, err = codexModelInvocation(request, environment, root, work, installed.Version, m.codexModelsCache())
+		invocation, err = codexModelInvocation(request, environment, root, work, installed, m.codexModelsCache())
 	} else {
 		invocation, err = claudeModelInvocation(request, environment, m.ClaudeConfigRoot)
 	}
@@ -360,14 +365,19 @@ func (m ModelInvoker) sessionInvoke(ctx context.Context, request ModelInvokeRequ
 		return ModelInvokeResult{Outcome: ModelInvokeAuthRequired, Reason: "Codex is not signed in"}, true
 	}
 	environment["CODEX_HOME"] = home
-	args := append([]string{"--config", `web_search="disabled"`}, codexInvokeSandboxConfig(runtime.GOOS)...)
+	args := []string{"--config", `web_search="disabled"`}
+	named := codexDefaultModel(prepared.Model, installed.DefaultModel)
+	if named != "" {
+		args = append(args, "--config", fmt.Sprintf("model=%q", named))
+	}
+	args = append(args, codexInvokeSandboxConfig(runtime.GOOS)...)
 	for _, feature := range codexInvokeDisabledFeatures {
 		args = append(args, "--config", "features."+feature+"=false")
 	}
 	invokeCtx, cancel := context.WithTimeout(ctx, modelInvokeTimeout(request.Timeout))
 	defer cancel()
 	answer, err := sessions.Run(invokeCtx, native.CodexModelRuntime{
-		Executable: installed.ExecutablePath, Version: installed.Version, Model: prepared.Model,
+		Executable: installed.ExecutablePath, Version: installed.Version, Model: cmp.Or(named, prepared.Model),
 		Environment: environment, Dir: work, Args: args,
 	}, native.CodexModelCall{
 		Session: request.SessionKey, Instructions: request.Instructions, Input: request.Input,
@@ -387,10 +397,7 @@ func (m ModelInvoker) sessionInvoke(ctx context.Context, request ModelInvokeRequ
 	case len(answer.Text) > ModelInvokeMaxTextBytes:
 		return ModelInvokeResult{Outcome: ModelInvokeFailed, Reason: "Runtime reply exceeds 1 MiB"}, true
 	}
-	model := answer.Model
-	if model == "" {
-		model = prepared.Model
-	}
+	model := cmp.Or(answer.Model, named, prepared.Model)
 	return ModelInvokeResult{
 		Outcome: ModelInvokeCompleted, Text: answer.Text, Model: model,
 		Usage: &ModelInvokeUsage{InputTokens: answer.Input, CachedInputTokens: answer.CachedInput, OutputTokens: answer.Output},
@@ -461,19 +468,20 @@ func codexWorkspaceFilesPrompt(files []ModelInvokeFile) string {
 	return prompt.String()
 }
 
-func codexModelInvocation(request ModelInvokeRequest, environment map[string]string, root, work, codexVersion string, modelsCache localworkspace.CodexModelsCachePeers) (modelInvocation, error) {
+func codexModelInvocation(request ModelInvokeRequest, environment map[string]string, root, work string, installed ModelInvokeRuntime, modelsCache localworkspace.CodexModelsCachePeers) (modelInvocation, error) {
 	sourceHome, err := localworkspace.CodexSourceHome(environment)
 	if err != nil {
 		return modelInvocation{}, modelInvokeUnavailableError{ModelInvokeRuntimeUnavailable, err.Error()}
 	}
 	home := filepath.Join(root, "codex-home")
-	prepared, err := localworkspace.PrepareCodexInvokeHome(home, sourceHome, codexVersion, modelsCache)
+	prepared, err := localworkspace.PrepareCodexInvokeHome(home, sourceHome, installed.Version, modelsCache)
 	if err != nil {
 		return modelInvocation{}, fmt.Errorf("prepare Codex home: %w", err)
 	}
 	if prepared.AuthenticationMissing {
 		return modelInvocation{}, modelInvokeUnavailableError{ModelInvokeAuthRequired, "Codex is not signed in"}
 	}
+	named := codexDefaultModel(prepared.Model, installed.DefaultModel)
 	environment["CODEX_HOME"] = home
 	schemaPath := ""
 	if request.Mode == ModelInvokeStructured {
@@ -485,10 +493,10 @@ func codexModelInvocation(request ModelInvokeRequest, environment map[string]str
 	lastPath := filepath.Join(root, "last.txt")
 	events := &codexInvokeEvents{}
 	return modelInvocation{
-		args:        codexModelInvokeArgs(request.Mode, request.ReasoningEffort, work, schemaPath, lastPath),
+		args:        codexModelInvokeArgs(installed.Version, request.Mode, request.ReasoningEffort, named, work, schemaPath, lastPath),
 		environment: environment,
 		stdout:      events,
-		model:       prepared.Model,
+		model:       cmp.Or(named, prepared.Model),
 		reply: func() (ModelInvokeResult, error) {
 			text, err := readModelInvokeReply(lastPath)
 			if err != nil {
@@ -500,9 +508,22 @@ func codexModelInvocation(request ModelInvokeRequest, environment map[string]str
 	}, nil
 }
 
-// codexModelInvokeArgs builds the codex exec argv. The prompt is read from
-// stdin, so no positional argument follows the options.
-func codexModelInvokeArgs(mode, effort, work, schemaPath, lastPath string) []string {
+// codexDefaultModel is the model a call names on the command line: the
+// Runtime catalog's default for the signed-in account, and only when
+// config.toml selects no model. Without one, Codex runs its built-in default,
+// which the account may not offer; the catalog lists only what it can use,
+// and Agent runs choose from the same catalog.
+func codexDefaultModel(configured, catalogDefault string) string {
+	if configured != "" {
+		return ""
+	}
+	return catalogDefault
+}
+
+// codexModelInvokeArgs builds the codex exec argv; an empty model leaves the
+// choice to config.toml. The prompt is read from stdin, so no positional
+// argument follows the options.
+func codexModelInvokeArgs(version, mode, effort, model, work, schemaPath, lastPath string) []string {
 	sandbox := "read-only"
 	if mode == ModelInvokeWorkspace {
 		sandbox = "workspace-write"
@@ -512,6 +533,9 @@ func codexModelInvokeArgs(mode, effort, work, schemaPath, lastPath string) []str
 		"--color", "never", "-C", work,
 		"-c", fmt.Sprintf("model_reasoning_effort=%q", effort),
 		"-c", `web_search="disabled"`,
+	}
+	if model != "" {
+		args = append(args, "-m", model)
 	}
 	args = append(args, codexInvokeSandboxConfig(runtime.GOOS)...)
 	if mode == ModelInvokeWorkspace {
@@ -525,6 +549,7 @@ func codexModelInvokeArgs(mode, effort, work, schemaPath, lastPath string) []str
 		}
 		args = append(args, "-c", "features."+feature+"=false")
 	}
+	args = append(args, native.CodexSubAgentConfig(version)...)
 	if schemaPath != "" {
 		args = append(args, "--output-schema", schemaPath)
 	}
@@ -627,6 +652,7 @@ func claudeModelInvocation(request ModelInvokeRequest, environment map[string]st
 	if err != nil {
 		return modelInvocation{}, fmt.Errorf("prepare Claude credentials: %w", err)
 	}
+	prepared = native.ClaudeEnvironment(prepared)
 	stdout := &boundedProbeBuffer{limit: modelInvokeMaxJSONOutputBytes}
 	var reported claudeInvokeOutput
 	parse := func() error {
@@ -833,6 +859,28 @@ var modelInvokeAuthMarkers = []string{
 	"invalid api key", "invalid_api_key", "please sign in",
 }
 
+// unavailableModelReason reads the API error body a Runtime reports as its
+// failure. The model_not_found code names a model the signed-in account
+// cannot use: every attempt fails the same way until the configuration or the
+// Runtime changes, so it is reported as incompatible rather than as a
+// transient failure.
+func unavailableModelReason(reported string) (string, bool) {
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(reported)), &body) != nil || body.Error.Code != "model_not_found" {
+		return "", false
+	}
+	reason := "The model is not available to this account"
+	if message := strings.TrimSpace(body.Error.Message); message != "" {
+		reason += ": " + message
+	}
+	return reason, true
+}
+
 // classifyModelInvokeFailure maps a failed run to an outcome. The caller's
 // cancellation wins over the call's own deadline, which wins over the CLI's
 // message.
@@ -842,6 +890,9 @@ func classifyModelInvokeFailure(ctx, invokeCtx context.Context, err error, stder
 	}
 	if errors.Is(invokeCtx.Err(), context.DeadlineExceeded) {
 		return ModelInvokeResult{Outcome: ModelInvokeTimedOut, Reason: "Model invocation timed out"}
+	}
+	if reason, ok := unavailableModelReason(reported); ok {
+		return ModelInvokeResult{Outcome: ModelInvokeRuntimeIncompatible, Reason: truncateRunes(redact.Text(reason), 300)}
 	}
 	evidence := strings.ToLower(stderr + "\n" + reported)
 	reason := reported

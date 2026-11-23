@@ -12,6 +12,7 @@ import { LazyVoiceKeyDialog } from "./lazy-voice-key-dialog";
 import { openRecordingWindow } from "./recording-window-store";
 import {
   isTranscriptRecoveryPaused,
+  transcriptRecoveryPercent,
   useOptionalVoiceControl,
   VoiceCapabilitiesContext,
   VoiceConnectionRetryContext,
@@ -46,10 +47,29 @@ export function RecordingEntry({
   const startWhenReady = useRef(false);
   const status = voice?.captureState?.status;
   const recording = status === "recording" || status === "starting";
-  const saving =
-    status === "finalizing" ||
-    (status === "recovering" &&
-      !(voice && isTranscriptRecoveryPaused(voice.captureState)));
+  const recoveryFailed = Boolean(
+    voice &&
+    status === "recovering" &&
+    isTranscriptRecoveryPaused(voice.captureState),
+  );
+  const recovering = status === "recovering" && !recoveryFailed;
+  const saving = status === "finalizing" || recovering;
+  // Stop gave up with the recording still running; the window offers Retry.
+  const stopFailed = Boolean(voice?.retryStop);
+  const capture =
+    voice?.captureState && "capture" in voice.captureState
+      ? voice.captureState.capture
+      : undefined;
+  // Older TeamHub releases report the progress but not the attempt.
+  const attempt =
+    recovering &&
+    capture?.transcript_recovery_attempt &&
+    capture.transcript_recovery_max_attempts
+      ? {
+          attempt: capture.transcript_recovery_attempt,
+          max: capture.transcript_recovery_max_attempts,
+        }
+      : undefined;
   const switchFromLive = Boolean(voiceMode?.session);
   const standby = voice?.listenerStatus === "standby";
   // Until voice connects, including while it reconnects, the icon spins.
@@ -77,7 +97,19 @@ export function RecordingEntry({
             ? t(roomListMessages.finishVoiceInput)
             : standby
               ? t(roomListMessages.recordingElsewhere)
-              : label);
+              : stopFailed
+                ? t(roomListMessages.stopFailedHint)
+                : recoveryFailed
+                  ? t(roomListMessages.recoveryFailedHint)
+                  : attempt
+                    ? t(roomListMessages.recoveringAttemptHint, attempt)
+                    : recovering
+                      ? t(roomListMessages.recoveringProgressHint, {
+                          progress: capture
+                            ? transcriptRecoveryPercent(capture)
+                            : 0,
+                        })
+                      : label);
   function start() {
     if (retryConnection) {
       retryConnection();
@@ -102,8 +134,9 @@ export function RecordingEntry({
       try {
         await voice.selectTargetRoom?.(anotherMeRoomId);
         await opened;
+        // A failed save or recovery opens on its Retry instead.
         openRecordingWindow({
-          autoStart: !saving || switchFromLive,
+          autoStart: !(saving || recoveryFailed) || switchFromLive,
         });
       } catch (cause) {
         await opened;
@@ -151,22 +184,27 @@ export function RecordingEntry({
         title={hint}
         type="button"
       >
-        {(saving && !switchFromLive) || connecting ? (
+        {(status === "finalizing" && !stopFailed && !switchFromLive) ||
+        connecting ? (
           <Icon icon={Loading03Icon} className="animate-spin" size={16} />
         ) : (
           <Icon icon={AiTranscribeAudioIcon} size={16} />
         )}
         <span className="xs-nav-btn-label">
-          {t(
-            saving && switchFromLive
-              ? roomListMessages.newMeeting
-              : roomListMessages.meetings,
-          )}
+          {saving && switchFromLive
+            ? t(roomListMessages.newMeeting)
+            : attempt
+              ? t(roomListMessages.recoveringLabel, attempt)
+              : t(roomListMessages.meetings)}
         </span>
-        {recording || connectionFailed ? (
+        {recording ||
+        connectionFailed ||
+        recovering ||
+        recoveryFailed ||
+        stopFailed ? (
           <span
             aria-hidden="true"
-            className={`absolute top-1 right-1 size-2 rounded-full ring-2 ring-app-sidebar ${recording ? "bg-app-danger" : "bg-app-warning"}`}
+            className={`absolute top-1 right-1 size-2 rounded-full ring-2 ring-app-sidebar ${recording || recoveryFailed || stopFailed ? "bg-app-danger" : "bg-app-warning"}`}
           />
         ) : null}
         {error ? (

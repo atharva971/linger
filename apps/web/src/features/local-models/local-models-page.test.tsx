@@ -8,13 +8,15 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { Suspense } from "react";
+import { StrictMode, Suspense } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TeamHubEventSync } from "@/features/rooms/event-sync";
 import { TeamHubRuntimeProvider } from "@/features/teamhub/teamhub-runtime";
 import type { TeamHubLocalComputerPage } from "@/features/teamhub/teamhub-types";
+import { resetLanguageForTest, setLanguage } from "@/i18n/language";
+import zhCN from "@/i18n/locales/zh-CN.json";
 import {
   acceptTenantAgentUpdates,
   createTestTeamHubRuntime,
@@ -129,14 +131,18 @@ function CurrentSearch() {
 // The page suspends until the Computer inventory loads, and React holds a
 // revealed Suspense boundary for 300 ms; loading the inventory first renders
 // the page at once.
-async function renderPage(fixture: Fixture, search = "") {
+async function renderPage(
+  fixture: Fixture,
+  search = "",
+  options: { strictMode?: boolean } = {},
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   await queryClient.ensureQueryData(
     localComputersQueryOptions(fixture.runtime.client, tenantId),
   );
-  render(
+  const tree = (
     <QueryClientProvider client={queryClient}>
       <TeamHubRuntimeProvider runtime={fixture.runtime}>
         <TeamHubEventSync />
@@ -166,8 +172,9 @@ async function renderPage(fixture: Fixture, search = "") {
           </Suspense>
         </MemoryRouter>
       </TeamHubRuntimeProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  render(options.strictMode ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
 function cards() {
@@ -465,7 +472,11 @@ describe("LocalModelsPage", () => {
     );
   });
 
-  it.each(["DOWNLOAD_FAILED", "NETWORK_UNAVAILABLE"] as const)(
+  it.each([
+    "DOWNLOAD_FAILED",
+    "NETWORK_UNAVAILABLE",
+    "DISK_INSUFFICIENT",
+  ] as const)(
     "resumes a download that stopped with %s instead of loading it",
     async (code) => {
       const fixture = setup([
@@ -479,7 +490,9 @@ describe("LocalModelsPage", () => {
       expect(statusOf("Llama 3.3 70B")).toBe(
         code === "NETWORK_UNAVAILABLE"
           ? "Download stopped · network unavailable"
-          : "Download stopped",
+          : code === "DISK_INSUFFICIENT"
+            ? "Download stopped · not enough disk"
+            : "Download stopped",
       );
       expect(
         screen.queryByRole("button", { name: "Retry Llama 3.3 70B" }),
@@ -1349,6 +1362,106 @@ describe("LocalModelsPage", () => {
     await waitFor(() =>
       expect(statuses()[0]).toBe("GPT-OSS 20B: Loaded · Memory · 14.3 GB"),
     );
+  });
+
+  it("prefers the saved browser choice over the desktop app's own Computer when both are present", async () => {
+    window.localStorage.setItem(
+      `linger.models.lastComputer:${tenantId}`,
+      "computer-mac",
+    );
+    (window as { lingerDesktop?: unknown }).lingerDesktop = {
+      computer: {
+        enroll: () => Promise.reject(new Error("not used")),
+        getStatus: () =>
+          Promise.resolve({
+            activeOperations: 0,
+            bridge: "connected",
+            computerId: "computer-lab",
+            runtime: "ready",
+          }),
+        onStatus: () => () => undefined,
+      },
+    };
+    await renderPage(setup());
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("combobox", { name: "Computer" }),
+      ).toHaveTextContent("Mac Studio"),
+    );
+    await waitFor(() =>
+      expect(statuses()[0]).toBe("GPT-OSS 20B: Loaded · Memory · 14.3 GB"),
+    );
+  });
+
+  it("remembers the last selected Computer in browser storage and reopens it when returning without a query param", async () => {
+    const fixture = setup();
+    await renderPage(fixture);
+    await findModels();
+
+    // First visit defaults to the first online Computer (lab-118).
+    expect(
+      screen.getByRole("combobox", { name: "Computer" }),
+    ).toHaveTextContent("lab-118");
+
+    // Switching to Mac Studio persists the choice for this tenant.
+    fireEvent.click(screen.getByRole("combobox", { name: "Computer" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Mac Studio" }));
+    await waitFor(() =>
+      expect(statuses()[0]).toBe("GPT-OSS 20B: Loaded · Memory · 14.3 GB"),
+    );
+    expect(
+      window.localStorage.getItem(`linger.models.lastComputer:${tenantId}`),
+    ).toBe("computer-mac");
+
+    // Re-entering Settings > Models with no ?computer= reopens Mac Studio.
+    cleanup();
+    await renderPage(fixture);
+    await findModels();
+    expect(
+      screen.getByRole("combobox", { name: "Computer" }),
+    ).toHaveTextContent("Mac Studio");
+    expect(statuses()[0]).toBe("GPT-OSS 20B: Loaded · Memory · 14.3 GB");
+
+    // A stale stored ID that is no longer owned falls back to the first online Computer.
+    cleanup();
+    window.localStorage.setItem(
+      `linger.models.lastComputer:${tenantId}`,
+      "computer-removed",
+    );
+    await renderPage(fixture);
+    await findModels();
+    expect(
+      screen.getByRole("combobox", { name: "Computer" }),
+    ).toHaveTextContent("lab-118");
+  });
+
+  it("does not overwrite the remembered owned Computer when viewing a shared Computer link", async () => {
+    const shared = labView({
+      computer: {
+        ...labView().computer,
+        computer_id: "computer-teammate",
+        display_name: "Teammate Rig",
+      },
+      viewer_is_owner: false,
+    });
+    const fixture = setup(
+      [labView(), macView(), shared],
+      [inventoryComputer(labView()), inventoryComputer(macView())],
+    );
+    window.localStorage.setItem(
+      `linger.models.lastComputer:${tenantId}`,
+      "computer-mac",
+    );
+
+    await renderPage(fixture, "?computer=computer-teammate");
+    await findModels();
+    expect(
+      screen.getByRole("combobox", { name: "Computer" }),
+    ).toHaveTextContent("Teammate Rig");
+    expect(
+      window.localStorage.getItem(`linger.models.lastComputer:${tenantId}`),
+    ).toBe("computer-mac");
   });
 
   it("shows rich model card icons, capability badges, and expanded metadata", async () => {
@@ -2502,6 +2615,8 @@ describe("Model source", () => {
     expect(guidance).toHaveTextContent(
       "Free GPU memory to install a larger model",
     );
+    await waitFor(() => expect(fixture.refreshes).toEqual(["computer-lab"]));
+    fixture.refreshes.length = 0;
     fireEvent.click(
       within(guidance).getByRole("button", { name: "Recheck memory" }),
     );
@@ -2573,6 +2688,8 @@ describe("Model source", () => {
     const dialog = screen.getByRole("dialog", { name: "Make room to load" });
     expect(dialog).toHaveTextContent("Other apps are using 20 GB.");
 
+    await waitFor(() => expect(fixture.refreshes).toEqual(["computer-mac"]));
+    fixture.refreshes.length = 0;
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Recheck memory" }),
     );
@@ -2669,6 +2786,8 @@ describe("Model source", () => {
       within(dialog).getByRole("button", { name: "Unload and load" }),
     ).toBeEnabled();
 
+    await waitFor(() => expect(fixture.refreshes).toEqual(["computer-mac"]));
+    fixture.refreshes.length = 0;
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Recheck memory" }),
     );
@@ -2917,6 +3036,55 @@ describe("Model source", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
+  it("auto-refreshes GPU memory on mount and reconnect, and disables BYOK on 503 LOCAL_COMPUTER_OFFLINE", async () => {
+    const fixture = setup([labView()]);
+    let sourceMode: "offline-503" | "online" = "online";
+    fixture.runtime.server.on("GET", switchPath, ({ params }) => {
+      if (sourceMode === "offline-503") {
+        return teamHubErrorResponse(503, "LOCAL_COMPUTER_OFFLINE");
+      }
+      return Response.json({
+        computer_id: params.computerId,
+        online: true,
+        status: byokStatus,
+        viewer_is_owner: true,
+      });
+    });
+
+    await renderPage(fixture);
+
+    // Mount auto-refreshes GPU memory once for an online owned Computer.
+    expect(await screen.findByLabelText("Base URL")).toBeEnabled();
+    await waitFor(() => expect(fixture.refreshes).toEqual(["computer-lab"]));
+
+    // A computers invalidation while the Computer is offline (503 LOCAL_COMPUTER_OFFLINE)
+    // immediately disables BYOK and shows the offline notice.
+    sourceMode = "offline-503";
+    fixture.runtime.events.emitSignal({
+      hint: { id: tenantId, resource: "computers", tenant_id: tenantId },
+      type: "resource.invalidated",
+    });
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Base URL")).toBeDisabled(),
+    );
+    expect(screen.getByText(/Reconnect it in/u)).toBeVisible();
+
+    // When the Computer comes back online, a computers invalidation re-enables BYOK
+    // and triggers a fresh GPU memory refresh.
+    fixture.refreshes.length = 0;
+    sourceMode = "online";
+    fixture.runtime.events.emitSignal({
+      hint: { id: tenantId, resource: "computers", tenant_id: tenantId },
+      type: "resource.invalidated",
+    });
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Base URL")).toBeEnabled(),
+    );
+    await waitFor(() => expect(fixture.refreshes).toEqual(["computer-lab"]));
+  });
+
   it("resets stale BYOK test feedback, protects saved keys across origins, clears models on a new address, and takes typed model IDs", async () => {
     const fixture = setup([labView()]);
     const { listings, switches, tests } = withSource(fixture, byokStatus);
@@ -3152,6 +3320,7 @@ describe("Model source", () => {
       reason: { code: "TOOL_FAILED" },
     });
     const retryTool = await screen.findByRole("button", { name: "Try again" });
+    fixture.refreshes.length = 0;
     fireEvent.click(retryTool);
     await waitFor(() => expect(fixture.refreshes).toEqual(["computer-online"]));
   });
@@ -3340,5 +3509,1292 @@ describe("Model source", () => {
         "Couldn't switch Codex to Llama 3.3 70B while working. Switch once the current turn finishes.",
       ),
     ).toBeVisible();
+  });
+
+  it("surfaces BYOK gateway and endpoint failure details when switching fails", async () => {
+    const fixture = setup([labView()]);
+    withSource(fixture, { ...byokStatus, mode: "local", runtime: "pi" });
+    const gatewayDetail =
+      "cannot record Bifrost process identity ([Errno 1] Operation not permitted: '/bin/ps'); stopped it";
+    const responses = [
+      Response.json(
+        {
+          error: {
+            code: "BYOK_GATEWAY_FAILED",
+            details: [{ field: "gateway", reason: gatewayDetail }],
+            message: gatewayDetail,
+            request_id: "test-byok-gateway-detail",
+          },
+        },
+        { status: 502 },
+      ),
+      Response.json(
+        {
+          error: {
+            code: "BYOK_GATEWAY_FAILED",
+            message: "The Computer could not configure its local BYOK gateway",
+            request_id: "test-byok-gateway-plain",
+          },
+        },
+        { status: 502 },
+      ),
+      teamHubErrorResponse(
+        409,
+        "BYOK_AUTH_FAILED",
+        "https://api.kimi.com/coding/v1/chat/completions rejected the API key (HTTP 401).",
+      ),
+    ];
+    let attempt = 0;
+    fixture.runtime.server.on(
+      "POST",
+      switchPath,
+      () => responses[attempt++] ?? responses[responses.length - 1]!,
+    );
+    await renderPage(fixture);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /BYOK/u }));
+    const submit = await screen.findByRole("button", {
+      name: "Save & Switch to BYOK",
+    });
+
+    fireEvent.click(submit);
+    const gatewayAlert = await screen.findByRole("alert");
+    expect(gatewayAlert).toHaveTextContent(
+      `The computer couldn't configure its local BYOK gateway: ${gatewayDetail}`,
+    );
+    expect(gatewayAlert).not.toHaveTextContent(
+      "The computer couldn't switch. Try again.",
+    );
+
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        /^The computer couldn't configure its local BYOK gateway\.$/u,
+      ),
+    );
+
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "https://api.kimi.com/coding/v1/chat/completions rejected the API key (HTTP 401).",
+      ),
+    );
+  });
+
+  it("localizes BYOK gateway failure copy in Simplified Chinese while keeping Computer detail", async () => {
+    try {
+      await setLanguage("zh-CN");
+      const fixture = setup([labView()]);
+      withSource(fixture, { ...byokStatus, mode: "local", runtime: "pi" });
+      const gatewayDetail =
+        "cannot record Bifrost process identity ([Errno 1] Operation not permitted: '/bin/ps'); stopped it";
+      const responses = [
+        Response.json(
+          {
+            error: {
+              code: "BYOK_GATEWAY_FAILED",
+              details: [{ field: "gateway", reason: gatewayDetail }],
+              message: gatewayDetail,
+              request_id: "test-byok-gateway-zh-detail",
+            },
+          },
+          { status: 502 },
+        ),
+        Response.json(
+          {
+            error: {
+              code: "BYOK_GATEWAY_FAILED",
+              message:
+                "The Computer could not configure its local BYOK gateway",
+              request_id: "test-byok-gateway-zh-plain",
+            },
+          },
+          { status: 502 },
+        ),
+      ];
+      let attempt = 0;
+      fixture.runtime.server.on(
+        "POST",
+        switchPath,
+        () => responses[attempt++] ?? responses[responses.length - 1]!,
+      );
+      await renderPage(fixture);
+
+      fireEvent.click(await screen.findByRole("tab", { name: /BYOK/u }));
+      const submit = await screen.findByRole("button", {
+        name: zhCN.localModels.saveAndSwitch,
+      });
+
+      fireEvent.click(submit);
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(
+        zhCN.localModels.sourceByokGatewayFailedDetail.replace(
+          "{detail}",
+          gatewayDetail,
+        ),
+      );
+      expect(alert).not.toHaveTextContent(zhCN.localModels.sourceSwitchFailed);
+
+      fireEvent.click(submit);
+      await waitFor(() =>
+        expect(screen.getByRole("alert")).toHaveTextContent(
+          zhCN.localModels.sourceByokGatewayFailed,
+        ),
+      );
+    } finally {
+      resetLanguageForTest();
+    }
+  });
+
+  it("shows a host blocker banner with Switch to BYOK when the Computer has an unsupported GPU", async () => {
+    const amdView = labView({
+      models: [
+        modelView(
+          localModel({
+            availability: {
+              downloadable: false,
+              reason: { code: "GPU_UNSUPPORTED", gpu_vendor: "amd" },
+            },
+            fit: "none",
+            id: "qwen3.8-27b:UD-IQ3_S",
+            name: "Qwen3.8 27B",
+            pool: undefined,
+          }),
+        ),
+      ],
+      pools: [],
+    });
+    const fixture = setup([amdView]);
+    withSource(fixture, { ...byokStatus, mode: "local", runtime: "pi" });
+    await renderPage(fixture);
+
+    const banner = await screen.findByRole("complementary", {
+      name: "Local model requirements",
+    });
+    expect(banner).toHaveTextContent(
+      "Local models need an NVIDIA GPU or Apple Silicon Mac",
+    );
+    expect(banner).toHaveTextContent("AMD GPU");
+    expect(statusOf("Qwen3.8 27B")).toBe("Can't download · GPU not supported");
+
+    fireEvent.click(
+      within(banner).getByRole("button", { name: "Switch to BYOK" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Save & Switch to BYOK" }),
+    ).toBeVisible();
+  });
+
+  it("shows driver update and missing runtime banners with Recheck memory and RAM detail copy", async () => {
+    const driverView = labView({
+      models: [
+        modelView(
+          localModel({
+            availability: {
+              downloadable: false,
+              reason: {
+                code: "DRIVER_UPDATE_REQUIRED",
+                detected_cuda: "11.8",
+                driver_version: "525.60",
+                required_cuda: "12.4",
+              },
+            },
+            fit: "none",
+            id: "qwen3.8-27b:UD-IQ3_S",
+            name: "Qwen3.8 27B",
+            pool: undefined,
+          }),
+        ),
+      ],
+      pools: [],
+    });
+    const fixture = setup([driverView]);
+    await renderPage(fixture);
+
+    const banner = await screen.findByRole("complementary", {
+      name: "Local model requirements",
+    });
+    expect(banner).toHaveTextContent(
+      "Update the NVIDIA driver to use local models",
+    );
+    expect(banner).toHaveTextContent("CUDA 11.8");
+    expect(banner).toHaveTextContent("CUDA 12.4");
+    await waitFor(() => expect(fixture.refreshes).toEqual(["computer-lab"]));
+    fixture.refreshes.length = 0;
+    fireEvent.click(
+      within(banner).getByRole("button", { name: "Recheck memory" }),
+    );
+    await waitFor(() => expect(fixture.refreshes).toEqual(["computer-lab"]));
+
+    cleanup();
+    const runtimeView = labView({
+      models: [
+        modelView(
+          localModel({
+            availability: {
+              downloadable: false,
+              reason: {
+                code: "RUNTIME_DEPENDENCY_MISSING",
+                missing_libraries: ["libgomp.so.1"],
+              },
+            },
+            fit: "none",
+            id: "qwen3.8-27b:UD-IQ3_S",
+            name: "Qwen3.8 27B",
+            pool: undefined,
+          }),
+        ),
+      ],
+      pools: [],
+    });
+    await renderPage(setup([runtimeView]));
+    const runtimeBanner = await screen.findByRole("complementary", {
+      name: "Local model requirements",
+    });
+    expect(runtimeBanner).toHaveTextContent("libgomp.so.1");
+    expect(statusOf("Qwen3.8 27B")).toBe(
+      "Can't download · missing runtime library",
+    );
+
+    cleanup();
+    const ramShortView = labView({
+      models: [
+        modelView(
+          localModel({
+            availability: {
+              downloadable: false,
+              reason: {
+                code: "MEMORY_INSUFFICIENT",
+                have_bytes: gb(8),
+                memory_kind: "ram",
+                need_bytes: gb(16),
+              },
+            },
+            fit: "none",
+            id: "qwen3.8-27b:UD-IQ3_S",
+            name: "Qwen3.8 27B",
+            pool: undefined,
+          }),
+        ),
+      ],
+    });
+    await renderPage(setup([ramShortView]));
+    await findModels();
+    expect(statusOf("Qwen3.8 27B")).toBe("Can't download · needs 16 GB RAM");
+    fireEvent.click(screen.getByRole("button", { name: "Qwen3.8 27B" }));
+    expect(
+      screen.getByRole("region", { name: "Qwen3.8 27B details" }),
+    ).toHaveTextContent(
+      "Needs 16 GB of system memory (RAM); this computer has 8 GB available.",
+    );
+  });
+
+  it("shows a prominent warning banner when localmodels debug mode is active, in English and Chinese", async () => {
+    const debugView = labView({
+      debug: {
+        config_path: "/home/ana/.config/localmodels/debug.json",
+        mode: "tiny",
+        source: "user_config",
+      },
+    });
+    await renderPage(setup([debugView]));
+    const banner = await screen.findByRole("complementary", {
+      name: "Debug mode active",
+    });
+    expect(banner).toHaveTextContent("Debug mode active (tiny)");
+    expect(banner).toHaveTextContent(
+      "/home/ana/.config/localmodels/debug.json",
+    );
+    expect(banner).toHaveTextContent("localmodels debug off");
+
+    cleanup();
+    try {
+      await setLanguage("zh-CN");
+      const zhDebugView = labView({
+        debug: { mode: "simulate", source: "env" },
+      });
+      await renderPage(setup([zhDebugView]));
+      const zhBanner = await screen.findByRole("complementary", {
+        name: zhCN.localModels.debugBannerRegion,
+      });
+      expect(zhBanner).toHaveTextContent(
+        zhCN.localModels.debugBannerSimulateTitle,
+      );
+      expect(zhBanner).toHaveTextContent(zhCN.localModels.debugBannerEnvBody);
+    } finally {
+      resetLanguageForTest();
+    }
+  });
+
+  it("recovers cleanly after manual Recheck returns LOCAL_COMPUTER_OFFLINE and the Computer reconnects", async () => {
+    const onlineView = labView();
+    const offlineView = labView({
+      computer: { ...onlineView.computer, status: "offline" },
+    });
+    const fixture = setup([onlineView]);
+    let computerOnline = true;
+    fixture.runtime.server
+      .on("GET", viewPath, () => (computerOnline ? onlineView : offlineView))
+      .on("GET", modelSourcePath, ({ params }) =>
+        computerOnline
+          ? Response.json({
+              computer_id: params.computerId,
+              online: true,
+              viewer_is_owner: true,
+            })
+          : teamHubErrorResponse(503, "LOCAL_COMPUTER_OFFLINE"),
+      )
+      .on("POST", viewPath, ({ params }) => {
+        if (!computerOnline) {
+          return teamHubErrorResponse(503, "LOCAL_COMPUTER_OFFLINE");
+        }
+        fixture.refreshes.push(params.computerId!);
+        return Response.json(
+          { action: "refresh", computer_id: params.computerId },
+          { status: 202 },
+        );
+      });
+
+    await renderPage(fixture);
+    await findModels();
+    await waitFor(() => expect(fixture.refreshes).toEqual(["computer-lab"]));
+    fixture.refreshes.length = 0;
+
+    // The Computer disconnects just before the owner clicks Recheck memory.
+    computerOnline = false;
+    fireEvent.click(screen.getByRole("button", { name: "Recheck memory" }));
+    expect(
+      await screen.findByText(
+        "The computer is offline. Reconnect it in Computers, then try again.",
+      ),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Recheck memory" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText(/This is what it last reported\./u)).toBeVisible();
+
+    // Once the Computer reconnects, offline state clears, Recheck memory returns,
+    // the stale offline error banner clears, and reconnect auto-refresh runs.
+    computerOnline = true;
+    fixture.runtime.events.emitSignal({
+      hint: { id: tenantId, resource: "computers", tenant_id: tenantId },
+      type: "resource.invalidated",
+    });
+
+    const recheck = await screen.findByRole("button", {
+      name: "Recheck memory",
+    });
+    expect(
+      screen.queryByText(
+        "The computer is offline. Reconnect it in Computers, then try again.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/This is what it last reported\./u),
+    ).not.toBeInTheDocument();
+    await waitFor(() => expect(fixture.refreshes).toEqual(["computer-lab"]));
+    await waitFor(() => expect(recheck).toBeEnabled());
+
+    // Subsequent manual Recheck continues working with no deadlock.
+    fixture.refreshes.length = 0;
+    fireEvent.click(recheck);
+    await waitFor(() => expect(fixture.refreshes).toEqual(["computer-lab"]));
+  });
+
+  it("still invalidates local-models after mount auto-refresh settles under StrictMode", async () => {
+    const initial = labView();
+    const refreshed = labView({
+      observed_at: "2026-11-13T10:15:00.000Z",
+      pools: [gpuPool(0, 24)],
+    });
+    const fixture = setup([initial]);
+    let releaseRefresh!: () => void;
+    let getCount = 0;
+    fixture.runtime.server
+      .on("GET", viewPath, () => {
+        getCount += 1;
+        return fixture.views["computer-lab"]!;
+      })
+      .on(
+        "POST",
+        viewPath,
+        ({ params }) =>
+          new Promise((resolve) => {
+            fixture.refreshes.push(params.computerId!);
+            releaseRefresh = () =>
+              resolve(
+                Response.json(
+                  { action: "refresh", computer_id: params.computerId },
+                  { status: 202 },
+                ),
+              );
+          }),
+      );
+
+    await renderPage(fixture, "", { strictMode: true });
+    await findModels();
+    await waitFor(() => expect(fixture.refreshes).toEqual(["computer-lab"]));
+    const recheck = screen.getByRole("button", { name: "Recheck memory" });
+    expect(recheck).toBeDisabled();
+    expect(recheck).toHaveAttribute("aria-busy", "true");
+    fireEvent.click(recheck);
+    expect(fixture.refreshes).toEqual(["computer-lab"]);
+    const readsBeforeSettle = getCount;
+
+    fixture.views["computer-lab"] = refreshed;
+    await reactAct(async () => {
+      releaseRefresh();
+    });
+
+    await waitFor(() => expect(getCount).toBeGreaterThan(readsBeforeSettle));
+    expect(
+      await screen.findByText("0 GB of 24 GB GPU memory in use"),
+    ).toBeVisible();
+    await waitFor(() => expect(recheck).toBeEnabled());
+    expect(fixture.refreshes).toEqual(["computer-lab"]);
+  });
+
+  it("polls while model-source is offline even if local-models still says online, then stops polling once online", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = setup([labView()]);
+      let sourceOnline = false;
+      let sourceReads = 0;
+      let modelReads = 0;
+      fixture.runtime.server
+        .on("GET", viewPath, () => {
+          modelReads += 1;
+          return fixture.views["computer-lab"]!;
+        })
+        .on("GET", modelSourcePath, ({ params }) => {
+          sourceReads += 1;
+          if (!sourceOnline) {
+            return teamHubErrorResponse(503, "LOCAL_COMPUTER_OFFLINE");
+          }
+          return Response.json({
+            computer_id: params.computerId,
+            online: true,
+            viewer_is_owner: true,
+          });
+        });
+
+      await renderPage(fixture);
+      await reactAct(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+
+      expect(screen.getByText(/Reconnect it in/u)).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: "Recheck memory" }),
+      ).not.toBeInTheDocument();
+
+      // Computer reconnects without an SSE event; 5s polling recovers both queries.
+      sourceOnline = true;
+      const sourceReadsBeforePoll = sourceReads;
+      const modelReadsBeforePoll = modelReads;
+      await reactAct(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      expect(sourceReads).toBeGreaterThan(sourceReadsBeforePoll);
+      expect(modelReads).toBeGreaterThan(modelReadsBeforePoll);
+      expect(
+        screen.getByRole("button", { name: "Recheck memory" }),
+      ).toBeEnabled();
+      expect(screen.queryByText(/Reconnect it in/u)).not.toBeInTheDocument();
+
+      // Once back online, polling stops cleanly with no refetch loop.
+      await reactAct(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      const settledSourceReads = sourceReads;
+      const settledModelReads = modelReads;
+      await reactAct(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      expect(sourceReads).toBe(settledSourceReads);
+      expect(modelReads).toBe(settledModelReads);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows probe timeout copy instead of switch timeout copy on BYOK probes", async () => {
+    const fixture = setup([labView()]);
+    withSource(fixture, byokStatus);
+    fixture.runtime.server
+      .on("POST", modelsPath, () =>
+        teamHubErrorResponse(
+          504,
+          "MODEL_SOURCE_UNCONFIRMED",
+          "The Computer did not answer in time",
+        ),
+      )
+      .on("POST", testPath, () =>
+        teamHubErrorResponse(
+          504,
+          "MODEL_SOURCE_UNCONFIRMED",
+          "The Computer did not answer in time",
+        ),
+      );
+    await renderPage(fixture);
+
+    fireEvent.click(await screen.findByRole("button", { name: "List models" }));
+    expect(
+      await screen.findByText(
+        "The computer didn't answer in time while checking the endpoint. Try again.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/It may still be switching/u),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "The computer didn't answer in time while checking the endpoint. Try again.",
+    );
+    expect(alert).not.toHaveTextContent("It may still be switching");
+  });
+
+  it("aborts and ignores stale BYOK models and test probes across rapid edits and tab switches", async () => {
+    const fixture = setup([labView()]);
+    withSource(fixture, byokStatus);
+    const heldModels: {
+      release: (response: Response) => void;
+      signal: AbortSignal;
+    }[] = [];
+    const heldTests: {
+      release: (response: Response) => void;
+      signal: AbortSignal;
+    }[] = [];
+    fixture.runtime.server
+      .on(
+        "POST",
+        modelsPath,
+        ({ request }) =>
+          new Promise<Response>((resolve) => {
+            heldModels.push({ release: resolve, signal: request.signal });
+          }),
+      )
+      .on(
+        "POST",
+        testPath,
+        ({ request }) =>
+          new Promise<Response>((resolve) => {
+            heldTests.push({ release: resolve, signal: request.signal });
+          }),
+      );
+    await renderPage(fixture);
+
+    const listButton = await screen.findByRole("button", {
+      name: "List models",
+    });
+    const baseUrl = screen.getByLabelText("Base URL");
+    const modelInput = screen.getByLabelText("Model");
+
+    // First models probe is aborted and cleared as soon as the address changes.
+    fireEvent.click(listButton);
+    await waitFor(() => expect(heldModels).toHaveLength(1));
+    expect(
+      screen.getByText(
+        "Listing models from https://api.example.com/v1/models…",
+      ),
+    ).toBeVisible();
+
+    fireEvent.change(baseUrl, {
+      target: { value: "https://other.example.net" },
+    });
+    expect(heldModels[0]!.signal.aborted).toBe(true);
+    expect(
+      screen.getByText("List the endpoint's models, or type an ID."),
+    ).toBeVisible();
+
+    // A newer models probe succeeds; settling the stale first probe does not overwrite it or flash an error.
+    fireEvent.click(listButton);
+    await waitFor(() => expect(heldModels).toHaveLength(2));
+    await reactAct(async () => {
+      heldModels[1]!.release(
+        Response.json({
+          models: [{ id: "other/model", name: "Other" }],
+          url: "https://other.example.net/v1/models",
+        }),
+      );
+    });
+    expect(
+      await screen.findByText(
+        "1 model listed from https://other.example.net/v1/models.",
+      ),
+    ).toBeVisible();
+
+    await reactAct(async () => {
+      heldModels[0]!.release(
+        teamHubErrorResponse(502, "MODEL_SOURCE_FAILED", "stale models error"),
+      );
+    });
+    expect(
+      screen.getByText(
+        "1 model listed from https://other.example.net/v1/models.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("stale models error")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Something went wrong. Try again."),
+    ).not.toBeInTheDocument();
+
+    // First test probe is aborted when the model changes; settling it after a newer test never overwrites Connected.
+    const testButton = screen.getByRole("button", { name: "Test" });
+    fireEvent.click(testButton);
+    await waitFor(() => expect(heldTests).toHaveLength(1));
+
+    fireEvent.change(modelInput, { target: { value: "other/model" } });
+    expect(heldTests[0]!.signal.aborted).toBe(true);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    fireEvent.click(testButton);
+    await waitFor(() => expect(heldTests).toHaveLength(2));
+    await reactAct(async () => {
+      heldTests[1]!.release(
+        Response.json({
+          context_window: 65_536,
+          model_id: "other/model",
+          ok: true,
+          protocol: "openai-chat",
+          url: "https://other.example.net/v1/chat/completions",
+        }),
+      );
+    });
+    const connected = (await screen.findByText("Connected")).closest(
+      '[role="status"]',
+    );
+    expect(connected).toHaveTextContent("other/model · 64K context");
+
+    await reactAct(async () => {
+      heldTests[0]!.release(
+        teamHubErrorResponse(502, "MODEL_SOURCE_FAILED", "stale test error"),
+      );
+    });
+    expect(screen.getByText("Connected")).toBeVisible();
+    expect(screen.queryByText("Couldn't connect")).not.toBeInTheDocument();
+    expect(screen.queryByText("stale test error")).not.toBeInTheDocument();
+
+    // Switching tabs aborts in-flight probes cleanly on unmount without flashing errors.
+    fireEvent.click(listButton);
+    fireEvent.click(testButton);
+    await waitFor(() => {
+      expect(heldModels).toHaveLength(3);
+      expect(heldTests).toHaveLength(3);
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Local model" }));
+    expect(heldModels[2]!.signal.aborted).toBe(true);
+    expect(heldTests[2]!.signal.aborted).toBe(true);
+
+    await reactAct(async () => {
+      heldModels[2]!.release(
+        teamHubErrorResponse(503, "LOCAL_COMPUTER_OFFLINE"),
+      );
+      heldTests[2]!.release(
+        teamHubErrorResponse(503, "LOCAL_COMPUTER_OFFLINE"),
+      );
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("Featured Inkling 2 Mini spotlight", () => {
+  const switchPath =
+    "/v0/tenants/{tenantId}/local-computers/{computerId}/model-source";
+
+  function inklingModel(
+    fields: Partial<Parameters<typeof localModel>[0]> = {},
+  ) {
+    return localModel({
+      active_parameters: "3.4B",
+      architecture: "moe",
+      capabilities: ["coding", "vision", "tool_use"],
+      context_tokens: 1_048_576,
+      download_bytes: gb(16.5),
+      family: "other",
+      fit: "gpu",
+      id: "inkling-2-mini:UD-Q4_K_M",
+      license: "Apache-2.0",
+      memory_bytes: gb(19.2),
+      name: "Inkling 2 Mini",
+      parameters: "26.4B",
+      pi_model: "localmodels-library/inkling-2-mini",
+      pool: "gpu:1",
+      publisher: "Thinking Machines",
+      quant: "UD-Q4_K_M",
+      source_url: "https://huggingface.co/thinkingmachines/Inkling-2-Mini",
+      vision: true,
+      ...fields,
+    });
+  }
+
+  function spotlightRegion() {
+    return screen.getByRole("region", {
+      name: "Featured model: Inkling 2 Mini",
+    });
+  }
+
+  it("wraps the single Inkling 2 Mini ModelRow with partner links, real download/cancel, live progress, and no duplicate controls", async () => {
+    const view = labView({
+      models: [...labView().models, modelView(inklingModel())],
+    });
+    const fixture = setup([view]);
+    await renderPage(fixture);
+    await findModels();
+
+    const spotlight = spotlightRegion();
+    expect(spotlight).toHaveAttribute("data-in-catalog", "true");
+    expect(spotlight).toHaveTextContent("New");
+    expect(spotlight).toHaveTextContent("Featured · Thinking Machines");
+    expect(spotlight).toHaveTextContent("Inkling 2 Mini");
+    expect(spotlight).toHaveTextContent(
+      "26.4B looped MoE (3.4B active) built for local agentic coding and vision — Apache 2.0.",
+    );
+
+    const announcement = within(spotlight).getByRole("link", {
+      name: "Read announcement",
+    });
+    expect(announcement).toHaveAttribute(
+      "href",
+      "https://thinkingmachines.ai/news/inkling-2-mini/",
+    );
+    expect(announcement).toHaveAttribute("target", "_blank");
+    expect(announcement).toHaveAttribute("rel", "noopener noreferrer");
+
+    const huggingFace = within(spotlight).getByRole("link", {
+      name: "Hugging Face",
+    });
+    expect(huggingFace).toHaveAttribute(
+      "href",
+      "https://huggingface.co/thinkingmachines/Inkling-2-Mini",
+    );
+    expect(huggingFace).toHaveAttribute("target", "_blank");
+    expect(huggingFace).toHaveAttribute("rel", "noopener noreferrer");
+
+    // Inkling 2 Mini renders once inside the spotlight at the top of Models,
+    // without duplicating controls or a second row below.
+    expect(statuses()).toEqual([
+      "Inkling 2 Mini: Not downloaded · 16.5 GB",
+      "Qwen3 Coder 30B: Loaded · GPU 0 · 21.4 GB",
+      "Gemma 3 27B: Downloaded",
+      "GPT-OSS 20B: Not downloaded · 12.1 GB · Recommended",
+      "Gemma 3 4B: Not downloaded · 3.3 GB",
+      "Llama 3.3 70B: Not downloaded · 42.5 GB · runs slower",
+      "Llama 3.1 405B: Can't download · needs 230 GB",
+    ]);
+    expect(
+      screen.getAllByRole("button", { name: "Download Inkling 2 Mini" }),
+    ).toHaveLength(1);
+    const inklingCard = within(spotlight).getByRole("article");
+    expect(inklingCard).toBe(card("Inkling 2 Mini"));
+    expect(inklingCard).toHaveAttribute("data-status", "available");
+    expect(inklingCard).toHaveAttribute("data-featured", "true");
+    expect(within(inklingCard).queryByText("Featured")).toBeNull();
+    const inklingTile = inklingCard.querySelector('[data-family="other"]');
+    expect(inklingTile).toHaveClass(
+      "bg-[var(--app-mention-surface)]",
+      "text-app-info",
+    );
+
+    // Clicking Download in the spotlight runs the real download action.
+    fireEvent.click(
+      within(spotlight).getByRole("button", {
+        name: "Download Inkling 2 Mini",
+      }),
+    );
+    await waitFor(() =>
+      expect(fixture.actions).toEqual([
+        {
+          body: { action: "download" },
+          computerId: "computer-lab",
+          modelId: "inkling-2-mini:UD-Q4_K_M",
+        },
+      ]),
+    );
+
+    const mb = 1024 * 1024;
+    publishSnapshot(
+      fixture,
+      withModel(view, "inkling-2-mini:UD-Q4_K_M", {
+        download: {
+          bytes_per_second: 50 * mb,
+          done_bytes: 5_000 * mb,
+          step: "download",
+          total_bytes: 20_000 * mb,
+        },
+        state: "downloading",
+      }),
+    );
+    await waitFor(() =>
+      expect(spotlight).toHaveTextContent(
+        "Downloading · 25% · 50 MB/s · 5m left",
+      ),
+    );
+    expect(within(spotlight).getByRole("article")).toHaveAttribute(
+      "data-status",
+      "downloading",
+    );
+    expect(
+      within(spotlight).getByRole("progressbar", {
+        name: "Inkling 2 Mini download progress",
+      }),
+    ).toHaveAttribute("aria-valuenow", "25");
+
+    fireEvent.click(
+      within(spotlight).getByRole("button", { name: "Cancel Inkling 2 Mini" }),
+    );
+    await waitFor(() =>
+      expect(fixture.actions.at(-1)?.body).toEqual({ action: "cancel" }),
+    );
+
+    // When Inkling 2 Mini is also recommended, the spotlight row keeps one Recommended label.
+    publishSnapshot(
+      fixture,
+      labView({
+        models: [
+          modelView(inklingModel({ recommended: true })),
+          modelView(
+            localModel({
+              id: "gemma3-4b:Q4_K_M",
+              name: "Gemma 3 4B",
+            }),
+          ),
+        ],
+        observed_at: "2026-11-13T10:02:00.000Z",
+      }),
+    );
+    await waitFor(() =>
+      expect(statusOf("Inkling 2 Mini")).toBe(
+        "Not downloaded · 16.5 GB · Recommended",
+      ),
+    );
+    const recommendedRow = within(spotlight).getByRole("article");
+    expect(recommendedRow).toHaveAttribute("data-featured", "true");
+    expect(recommendedRow).toHaveAttribute("data-recommended", "true");
+    expect(within(recommendedRow).getAllByText("Recommended")).toHaveLength(1);
+  });
+
+  it("loads directly when room exists and retries with Make room when the pool is full", async () => {
+    const idleRoomView = labView({
+      models: [
+        ...labView().models,
+        modelView(inklingModel({ pool: "gpu:1", state: "idle" })),
+      ],
+    });
+    const fixture = setup([idleRoomView]);
+    await renderPage(fixture);
+    await findModels();
+
+    const spotlight = spotlightRegion();
+    expect(within(spotlight).getByRole("article")).toHaveAttribute(
+      "data-status",
+      "idle",
+    );
+    fireEvent.click(
+      within(spotlight).getByRole("button", { name: "Load Inkling 2 Mini" }),
+    );
+    await waitFor(() =>
+      expect(within(spotlight).getByRole("article")).toHaveAttribute(
+        "data-status",
+        "loading",
+      ),
+    );
+    expect(spotlight).toHaveTextContent("Loading · GPU 1");
+    await waitFor(() =>
+      expect(fixture.actions).toEqual([
+        {
+          body: { action: "load" },
+          computerId: "computer-lab",
+          modelId: "inkling-2-mini:UD-Q4_K_M",
+        },
+      ]),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    // When the target pool is full (failed with LOAD_NO_ROOM), the wrapped row
+    // offers Retry (matching ModelRow) and opens Make room.
+    cleanup();
+    const tightMac = macView({
+      models: [
+        macView().models[0]!,
+        modelView(
+          inklingModel({
+            error: { code: "LOAD_NO_ROOM" },
+            fit: "unified",
+            memory_bytes: gb(40),
+            pool: "unified",
+            state: "failed",
+          }),
+        ),
+      ],
+    });
+    const macFixture = setup([tightMac]);
+    await renderPage(macFixture);
+    await findModels();
+
+    const macSpotlight = spotlightRegion();
+    expect(within(macSpotlight).getByRole("article")).toHaveAttribute(
+      "data-status",
+      "failed",
+    );
+    expect(macSpotlight).toHaveTextContent(
+      "Couldn't load · not enough free memory",
+    );
+    fireEvent.click(
+      within(macSpotlight).getByRole("button", {
+        name: "Retry Inkling 2 Mini",
+      }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "Make room to load" });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Unload and load" }),
+    );
+    await waitFor(() =>
+      expect(macFixture.actions).toEqual([
+        {
+          body: { action: "load", unload_first: ["gpt-oss-20b:Q4_K_M"] },
+          computerId: "computer-mac",
+          modelId: "inkling-2-mini:UD-Q4_K_M",
+        },
+      ]),
+    );
+  });
+
+  it("shows Loaded state with Use for Agents and Open chat actions when applicable", async () => {
+    const loadedView = labView({
+      models: [
+        ...labView().models,
+        modelView(
+          inklingModel({
+            endpoint: { base_url: "http://127.0.0.1:18101/v1" },
+            pool: "gpu:1",
+            state: "loaded",
+          }),
+        ),
+      ],
+    });
+    const fixture = setup([loadedView]);
+    const switches: unknown[] = [];
+    fixture.runtime.server
+      .on("GET", switchPath, ({ params }) =>
+        Response.json({
+          computer_id: params.computerId,
+          online: true,
+          status: {
+            byok: { configured: false, key_saved: false },
+            mode: "local",
+            runtime: "pi",
+            runtime_model: "localmodels-library/qwen3-coder-30b",
+          },
+          viewer_is_owner: true,
+        }),
+      )
+      .on("POST", switchPath, ({ body }) => {
+        switches.push(body);
+        return Response.json({
+          computer_id: "computer-lab",
+          online: true,
+          status: {
+            byok: { configured: false, key_saved: false },
+            mode: "local",
+            runtime: "pi",
+            runtime_model: "localmodels-library/inkling-2-mini",
+          },
+          viewer_is_owner: true,
+        });
+      });
+
+    await renderPage(fixture);
+    await findModels();
+
+    const spotlight = spotlightRegion();
+    expect(within(spotlight).getByRole("article")).toHaveAttribute(
+      "data-status",
+      "loaded",
+    );
+    expect(spotlight).toHaveTextContent("Loaded · GPU 1 · 19.2 GB");
+    const useButton = await within(spotlight).findByRole("button", {
+      name: "Use Inkling 2 Mini for Agents",
+    });
+    fireEvent.click(useButton);
+    await waitFor(() =>
+      expect(switches).toEqual([
+        { local_model_id: "inkling-2-mini:UD-Q4_K_M", mode: "local" },
+      ]),
+    );
+
+    // When Another Me is already using loaded Inkling 2 Mini, spotlight offers Open chat.
+    cleanup();
+    const chatFixture = setup([loadedView]);
+    enableReadyPi(chatFixture);
+    chatFixture.runtime.seed.tenantAgents =
+      chatFixture.runtime.seed.tenantAgents.map((agent) =>
+        agent.actor.id === "actor-delegate"
+          ? {
+              ...agent,
+              runtime: {
+                model: "localmodels-library/inkling-2-mini",
+                placement: {
+                  computer_id: "computer-lab",
+                  runtime_type: "pi",
+                  type: "local",
+                  workspace_grant_id: "grant-linger-workspace",
+                },
+              },
+            }
+          : agent,
+      );
+    await renderPage(chatFixture);
+    await findModels();
+
+    const chatSpotlight = spotlightRegion();
+    const openChat = await within(chatSpotlight).findByRole("link", {
+      name: "Open chat",
+    });
+    expect(openChat).toHaveAttribute(
+      "href",
+      "/t/tenant-northstar/rooms/room-another-me/chat",
+    );
+  });
+
+  it("handles unavailable, offline, read-only, multi-variant, org-prefixed, and absent-from-catalog states cleanly", async () => {
+    // 1. Absent from catalog.
+    await renderPage(setup([labView()]));
+    await findModels();
+
+    const absentSpotlight = spotlightRegion();
+    expect(absentSpotlight).toHaveAttribute("data-in-catalog", "false");
+    expect(absentSpotlight).toHaveTextContent(
+      "Not in this computer's local model catalog yet. Update Linger's local models runtime if you're on an older version.",
+    );
+    expect(within(absentSpotlight).queryByRole("article")).toBeNull();
+    expect(
+      within(absentSpotlight).getByRole("link", { name: "Read announcement" }),
+    ).toHaveAttribute(
+      "href",
+      "https://thinkingmachines.ai/news/inkling-2-mini/",
+    );
+    expect(
+      within(absentSpotlight).getByRole("link", { name: "Hugging Face" }),
+    ).toHaveAttribute(
+      "href",
+      "https://huggingface.co/thinkingmachines/Inkling-2-Mini",
+    );
+
+    // 2. Unavailable (memory insufficient) when it is the only model in catalog.
+    cleanup();
+    await renderPage(
+      setup([
+        labView({
+          models: [
+            modelView(
+              inklingModel({
+                availability: {
+                  downloadable: false,
+                  reason: {
+                    code: "MEMORY_INSUFFICIENT",
+                    have_bytes: gb(12),
+                    need_bytes: gb(20),
+                  },
+                },
+                fit: "none",
+                memory_bytes: gb(20),
+                pool: undefined,
+              }),
+            ),
+          ],
+        }),
+      ]),
+    );
+    await findModels();
+
+    const unavailableSpotlight = spotlightRegion();
+    expect(within(unavailableSpotlight).getByRole("article")).toHaveAttribute(
+      "data-status",
+      "unavailable",
+    );
+    expect(unavailableSpotlight).toHaveTextContent(
+      "Can't download · needs 20 GB",
+    );
+    expect(
+      within(unavailableSpotlight).queryByRole("button", {
+        name: "Download Inkling 2 Mini",
+      }),
+    ).toBeNull();
+    expect(
+      within(unavailableSpotlight).getByRole("link", { name: "Hugging Face" }),
+    ).toBeVisible();
+
+    // 3. Offline computer disables spotlight actions while preserving one page status notice.
+    cleanup();
+    await renderPage(
+      setup([
+        labView({
+          computer: { ...labView().computer, status: "offline" },
+          models: [modelView(inklingModel())],
+        }),
+      ]),
+    );
+    await findModels();
+
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(
+      within(spotlightRegion()).getByRole("button", {
+        name: "Download Inkling 2 Mini",
+      }),
+    ).toBeDisabled();
+
+    // 4. Read-only viewer disables spotlight actions while keeping partner links clickable.
+    cleanup();
+    await renderPage(
+      setup([
+        labView({
+          models: [modelView(inklingModel())],
+          viewer_is_owner: false,
+        }),
+      ]),
+    );
+    await findModels();
+
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(
+      within(spotlightRegion()).getByRole("button", {
+        name: "Download Inkling 2 Mini",
+      }),
+    ).toBeDisabled();
+    expect(
+      within(spotlightRegion()).getByRole("link", {
+        name: "Read announcement",
+      }),
+    ).toBeVisible();
+
+    // 5. Multiple sibling quant entries spotlight UD-Q4_K_M and keep sibling IQ3_XXS badged below.
+    cleanup();
+    const multiFixture = setup([
+      labView({
+        models: [
+          modelView(
+            inklingModel({
+              download_bytes: gb(11.4),
+              id: "inkling-2-mini-iq3xxs:UD-IQ3_XXS",
+              memory_bytes: gb(13.5),
+              name: "Inkling 2 Mini (IQ3_XXS)",
+              quant: "UD-IQ3_XXS",
+            }),
+          ),
+          modelView(inklingModel()),
+        ],
+      }),
+    ]);
+    await renderPage(multiFixture);
+    await findModels();
+
+    expect(statuses()).toEqual([
+      "Inkling 2 Mini: Not downloaded · 16.5 GB",
+      "Inkling 2 Mini (IQ3_XXS): Not downloaded · 11.4 GB",
+    ]);
+    const siblingCard = card("Inkling 2 Mini (IQ3_XXS)");
+    expect(siblingCard).toHaveAttribute("data-featured", "true");
+    expect(within(siblingCard).getAllByText("Featured")).toHaveLength(1);
+    fireEvent.click(
+      within(spotlightRegion()).getByRole("button", {
+        name: "Download Inkling 2 Mini",
+      }),
+    );
+    await waitFor(() =>
+      expect(multiFixture.actions).toEqual([
+        {
+          body: { action: "download" },
+          computerId: "computer-lab",
+          modelId: "inkling-2-mini:UD-Q4_K_M",
+        },
+      ]),
+    );
+
+    // 6. On a 16 GB GPU where Q4 is unavailable, spotlight wraps sibling IQ3_XXS.
+    cleanup();
+    const gpu16Fixture = setup([
+      labView({
+        models: [
+          modelView(
+            inklingModel({
+              availability: {
+                downloadable: false,
+                reason: {
+                  code: "MEMORY_INSUFFICIENT",
+                  have_bytes: gb(16),
+                  need_bytes: gb(19.2),
+                },
+              },
+              fit: "none",
+              pool: undefined,
+            }),
+          ),
+          modelView(
+            inklingModel({
+              download_bytes: gb(11.4),
+              id: "inkling-2-mini-iq3xxs:UD-IQ3_XXS",
+              memory_bytes: gb(13.5),
+              name: "Inkling 2 Mini (IQ3_XXS)",
+              pool: "gpu:0",
+              quant: "UD-IQ3_XXS",
+            }),
+          ),
+        ],
+        pools: [gpuPool(0, 16)],
+      }),
+    ]);
+    await renderPage(gpu16Fixture);
+    await findModels();
+
+    const gpu16Spotlight = spotlightRegion();
+    expect(within(gpu16Spotlight).getByRole("article")).toHaveAttribute(
+      "data-status",
+      "available",
+    );
+    expect(gpu16Spotlight).toHaveTextContent("Inkling 2 Mini (IQ3_XXS)");
+    expect(gpu16Spotlight).toHaveTextContent("11.4 GB");
+    fireEvent.click(
+      within(gpu16Spotlight).getByRole("button", {
+        name: "Download Inkling 2 Mini (IQ3_XXS)",
+      }),
+    );
+    await waitFor(() =>
+      expect(gpu16Fixture.actions).toEqual([
+        {
+          body: { action: "download" },
+          computerId: "computer-lab",
+          modelId: "inkling-2-mini-iq3xxs:UD-IQ3_XXS",
+        },
+      ]),
+    );
+
+    // 7. Org-prefixed / mixed-case IDs match consistently with Desktop and the installer.
+    cleanup();
+    await renderPage(
+      setup([
+        labView({
+          models: [
+            modelView(
+              inklingModel({
+                id: "thinkingmachines/Inkling-2-Mini",
+              }),
+            ),
+          ],
+        }),
+      ]),
+    );
+    await findModels();
+    expect(spotlightRegion()).toHaveAttribute("data-in-catalog", "true");
+    expect(
+      within(spotlightRegion()).getByRole("button", {
+        name: "Download Inkling 2 Mini",
+      }),
+    ).toBeEnabled();
   });
 });

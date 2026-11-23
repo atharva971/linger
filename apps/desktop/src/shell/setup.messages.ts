@@ -53,6 +53,10 @@ export const setupMessages = defineMessages("setup", {
   memoryWithServices: "{size} memory with its services",
   heldWhy:
     "Local model on hold. {reasons} Quick Install sets up {plan} now, or choose Check again once memory is free.",
+  heldWhyGeneric:
+    "Local model on hold. {reasons} Quick Install sets up {plan} now, or choose Check again once the issue is resolved.",
+  heldWhyCudaDriver:
+    "Local model on hold. {reasons} Quick Install sets up {plan} now.",
   keyRemovedOnInstall: "Removed when you install",
   keySaved: "Saved · type to replace",
   apiKey: "API key",
@@ -62,11 +66,29 @@ export const setupMessages = defineMessages("setup", {
   chooseSource: "Choose how your agents run.",
   localRecommended: "Recommended for this computer · Runs on Pi via Bifrost",
   localRuns: "Runs your tasks on this computer via Pi",
+  localOnHold: "Local model on hold",
   localNotAvailable: "Not available on this computer",
   recommendedRuntime: "Recommended: {runtime}.",
   subscriptionHint: "Sign in with your ChatGPT or Claude subscription.",
   locationHint:
     "Go back and set the install location to the drive itself (Linger installs into {folder}) or an empty folder directly on the drive.",
+
+  // Featured partner model spotlight (Inkling 2 Mini by Thinking Machines).
+  featuredModelName: "Inkling 2 Mini",
+  featuredPartnerBadge: "Featured · Thinking Machines",
+  featuredModelSpecs:
+    "26.4B Looped MoE · 3.4B active · Vision & Agentic Coding · Apache 2.0",
+  featuredModelSelected: "Selected for Quick Install on this computer.",
+  featuredModelLibraryNote:
+    "Featured in Linger's local model library · Switchable anytime in Settings → Models",
+  featuredModelCustomizeNote:
+    "Featured: Inkling 2 Mini by Thinking Machines · Switchable anytime in Settings → Models",
+  featuredModelAriaLabel:
+    "Featured local model: Inkling 2 Mini by Thinking Machines",
+  learnMoreLink: "Learn more ↗",
+  thinkingMachinesLink: "Thinking Machines ↗",
+  openAnnouncement:
+    "Open Thinking Machines Inkling 2 Mini announcement in browser",
 
   // Download progress.
   lessThanMinuteLeft: "less than a minute left",
@@ -89,6 +111,10 @@ export const setupMessages = defineMessages("setup", {
   reasonGpuSharing: "Other work is running on the GPU. Close it.",
   reasonGpuOwnership:
     "Linger couldn't tell which programs are using the GPU, so it can't share it. Close programs that use the GPU.",
+  reasonGatewayPortInUse:
+    "Another program is using the port Linger's local model gateway needs. Close the program using that port.",
+  reasonHarnessUnavailable:
+    "The Pi runtime required for local models isn't ready right now. Check your connection or permissions.",
   reasonFacts: "Linger couldn't read this computer's memory, disk or GPU.",
   reasonCudaUpdate:
     "Your NVIDIA driver supports CUDA {has}, but local models require CUDA {needs} or newer. Update your NVIDIA driver, then choose Check again.",
@@ -106,11 +132,17 @@ export const setupMessages = defineMessages("setup", {
   reasonPlanUnavailable: "No local model fits this computer.",
   reasonHeld:
     "Other programs are using the memory it needs. Close other programs.",
+  reasonHeldGeneric:
+    "Something on this computer is temporarily blocking the local model.",
   reasonUnavailable: "This computer can't run a local model now.",
   heldGpu: "On hold: The GPU has {free} free, needs {needed}",
   heldGpuOf: "On hold: GPU {gpu} has {free} free, needs {needed}",
   heldMemory: "On hold: {free} of memory free, needs {needed}",
+  heldGatewayPort: "On hold: free the gateway port, then Check again.",
+  heldHarnessUnavailable: "On hold: prepare the Pi runtime, then Check again.",
+  heldCudaDriver: "On hold: update your NVIDIA driver, then Check again.",
   heldClose: "On hold: close other programs, then Check again.",
+  heldResolve: "On hold: resolve the issue, then Check again.",
 
   // BYOK fields.
   pathMostProviders: "Most providers",
@@ -187,19 +219,34 @@ export const setupMessages = defineMessages("setup", {
   signInLeadClaude:
     "Your agents run on Claude Code. Authorize it with your Claude account to continue.",
   signInWaiting: "Waiting for authorization in your browser…",
-  deviceCode: "Enter this code in your browser:",
+  signInContinues: "Linger continues by itself once you've signed in.",
+  deviceCode: "Enter this code on the sign-in page:",
+  deviceCodeSetting:
+    "Turn on device code sign-in for Codex in ChatGPT first: Settings → Security.",
+  copyCode: "Copy code",
+  signInLink: "Sign-in link",
+  openInBrowser: "Open in browser",
+  copyLink: "Copy link",
+  browserFailed:
+    "Linger couldn't open a browser. Copy the link and open it in a browser on this computer.",
+  browserFailedDevice:
+    "Linger couldn't open a browser. Copy the link and open it in any browser, on this computer or another device.",
+  useDeviceCode: "Use a code on another device",
+  useBrowserHere: "Use the browser on this computer",
   signInFailed: "Sign-in did not finish.",
+  signInTimedOut: "Sign-in timed out. Retry to get a new link.",
+  signInEnded:
+    "Sign-in stopped before it finished. Retry, or choose another way below.",
+  signInUnavailable:
+    "This runtime can't be signed in to from here. Use a different runtime or BYOK.",
   authorize: "Authorize",
   retry: "Retry",
   otherRuntime: "Use a different runtime",
   byokInstead: "Use BYOK instead",
   continueWithByok: "Continue with BYOK",
-  openBrowserAgain: "Open browser again",
   cancel: "Cancel",
   havingTrouble: "Having trouble?",
-  signInHelpCode:
-    "If your browser didn't open, choose Open browser again, then paste the code the page shows.",
-  signInHelp: "If your browser didn't open, choose Open browser again.",
+  signInHelpCode: "If the sign-in page shows a code, paste it here.",
   pastedCode: "Code from the sign-in page",
   pasteCode: "Paste the code",
   continue: "Continue",

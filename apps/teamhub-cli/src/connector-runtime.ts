@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   operationHeaders,
   teamHubData,
@@ -16,7 +17,17 @@ import type {
 } from "./command-definition.js";
 import { connectorWriteApproval } from "./connector-approval.js";
 import { id, object, rootSchema } from "./connector-schemas.js";
-import { CliError, ConnectorError } from "./errors.js";
+import { CliError } from "./errors.js";
+import type { ErrorObject } from "ajv";
+import {
+  ajvInputIssues,
+  fileFailure,
+  fileSystemError,
+  flagPaths,
+  invalidFlag,
+  invalidInput,
+  mebibytes,
+} from "./input-issues.js";
 import type { ConnectorFile } from "./connector-files.js";
 import { accountIdentityText, displayText } from "./display-text.js";
 
@@ -70,15 +81,12 @@ export const toggle = (description: string): CommandOption => ({
 });
 export const record = (value: unknown, label = "response"): Json => {
   if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new ConnectorError(
-      "incomplete_response",
-      `The ${label} is incomplete.`,
-    );
+    throw new CliError("incomplete_response", `The ${label} is incomplete.`);
   return value as Json;
 };
 export const requiredString = (v: unknown, label: string): string => {
   if (typeof v !== "string" || !v.trim())
-    throw new ConnectorError("incomplete_response", `Missing ${label}.`);
+    throw new CliError("incomplete_response", `Missing ${label}.`);
   return v;
 };
 export const optionalFields = (v: Json): Json =>
@@ -93,7 +101,7 @@ export function unwrap(value: unknown): Json {
     result.success === false ||
     result.ok === false
   )
-    throw new ConnectorError(
+    throw new CliError(
       "provider_error",
       "The connected application rejected the operation.",
     );
@@ -129,7 +137,7 @@ export function validateAccountSelector(account: string | undefined): void {
       account.trim() !== account ||
       /[\r\n\p{Cc}]/u.test(account))
   )
-    throw new ConnectorError(
+    throw new CliError(
       "usage",
       "--account requires a connection ID or complete identity label.",
     );
@@ -148,21 +156,21 @@ export async function resolveConnectorAccount(
   if (resolution.status === "authorization_required")
     authorizationCard(resolution);
   if (resolution.status === "account_ambiguous")
-    throw new ConnectorError(
+    throw new CliError(
       "account_ambiguous",
       "The requested account is unavailable or more than one account matches. If one of the candidates is the account you meant, run again with --account set to its connection ID; otherwise pass the account's label (for example its email address) with --account to ask the user to authorize it.",
       { candidates: resolution.candidates, operation_rejected: true },
     );
   const selected = record(resolution.account, "selected account");
   if (resolution.status !== "ready")
-    throw new ConnectorError(
+    throw new CliError(
       "invalid_response",
       "TeamHub did not select an account for this application.",
     );
   return selected;
 }
 function authorizationCard(resolution: Json): never {
-  throw new ConnectorError(
+  throw new CliError(
     "authorization_required",
     "Waiting for the user to authorize the account; an authorization card is in the chat. End your turn: the card's result wakes you, then run this command again. If the user declines, don't retry.",
     { ...resolution, operation_rejected: true },
@@ -194,7 +202,7 @@ async function bindTools(
       matches.length !== 1 ||
       matches[0]!.tool_version !== connectorVersions[app]
     )
-      throw new ConnectorError(
+      throw new CliError(
         "capability_unavailable",
         `The exact binding for ${label} is unavailable.`,
         { operation_rejected: true },
@@ -272,10 +280,14 @@ export function connectorDefinition(spec: ConnectorSpec): CommandDefinition {
         ...normalized.input,
         ...(account === undefined ? {} : { account }),
       };
-      if (!(await validateSchema(spec.inputSchema, input)))
-        throw new ConnectorError(
-          "usage",
-          "The parameters do not satisfy this command's input schema; check --help or --schema.",
+      const errors = await schemaErrors(spec.inputSchema, input);
+      if (errors.length)
+        throw invalidInput(
+          `The input does not match ${spec.command.join(" ")}.`,
+          flagPaths(ajvInputIssues(errors, input), {
+            ...spec.options,
+            "--account": true,
+          }),
         );
       return { ...normalized, input };
     },
@@ -291,7 +303,7 @@ export function connectorDefinition(spec: ConnectorSpec): CommandDefinition {
         "connection ID",
       );
       if (account.app_key !== appKeys[app])
-        throw new ConnectorError(
+        throw new CliError(
           "invalid_response",
           "TeamHub did not select an account for this application.",
         );
@@ -334,7 +346,7 @@ export function connectorDefinition(spec: ConnectorSpec): CommandDefinition {
           typeof converted.markdown !== "string" ||
           !Array.isArray(converted.blocks)
         )
-          throw new ConnectorError(
+          throw new CliError(
             "invalid_response",
             "Notion content preparation is incomplete.",
           );
@@ -350,38 +362,36 @@ export function connectorDefinition(spec: ConnectorSpec): CommandDefinition {
             await import("./connector-files.js")
           ).snapshotConnectorFiles(sourceFiles)
         : [];
-      if (
-        app === "gmail" &&
-        files.reduce(
-          (total, file) => total + Math.ceil(file.sizeBytes / 3) * 4 + 2048,
-          Math.ceil(Buffer.byteLength(displayText(body.content ?? "")) / 3) *
-            4 +
-            8192,
-        ) >
-          25 * 1024 * 1024
-      )
-        throw new ConnectorError(
-          "too_large",
-          "The encoded Gmail message would exceed its 25 MiB limit.",
+      const encoded = files.reduce(
+        (total, file) => total + Math.ceil(file.sizeBytes / 3) * 4 + 2048,
+        Math.ceil(Buffer.byteLength(displayText(body.content ?? "")) / 3) * 4 +
+          8192,
+      );
+      if (app === "gmail" && encoded > 25 * 1024 * 1024)
+        throw invalidFlag(
+          "--attach",
+          "out_of_range",
+          `the encoded message must be at most 25 MiB; got ${mebibytes(encoded)}.`,
         );
+      const feishuEncoded = files.reduce(
+        (total, file) => total + Math.ceil(file.sizeBytes / 3) * 4,
+        0,
+      );
       if (
         app === "feishu-mail" &&
-        files.reduce(
-          (total, file) => total + Math.ceil(file.sizeBytes / 3) * 4,
-          0,
-        ) > FEISHU_MAIL_ATTACHMENT_BUDGET
+        feishuEncoded > FEISHU_MAIL_ATTACHMENT_BUDGET
       )
-        throw new ConnectorError(
-          "too_large",
-          "Feishu Mail attachments sent through Linger are limited to about 640 KiB in total; share a link instead.",
+        throw invalidFlag(
+          "--attach",
+          "out_of_range",
+          `Feishu Mail attachments sent through Linger are limited to about 640 KiB in total; got ${mebibytes(feishuEncoded)}. Share a link instead.`,
         );
-      if (
-        app === "outlook" &&
-        files.some((file) => file.sizeBytes > 150 * 1024 * 1024)
-      )
-        throw new ConnectorError(
-          "too_large",
-          "An Outlook attachment exceeds 150 MiB.",
+      const large = files.find((file) => file.sizeBytes > 150 * 1024 * 1024);
+      if (app === "outlook" && large)
+        throw invalidFlag(
+          "--attach",
+          "unreadable",
+          `${large.name}: larger than 150 MiB.`,
         );
       return {
         ...body,
@@ -406,7 +416,7 @@ export function connectorDefinition(spec: ConnectorSpec): CommandDefinition {
         if (runtime.confirmation) return confirmation();
         const output = { account: accountOutput(runtime), ...result };
         if (!(await validateSchema(outputSchema, output)))
-          throw new ConnectorError(
+          throw new CliError(
             "incomplete_response",
             "The application result does not satisfy this command's output schema.",
           );
@@ -414,22 +424,17 @@ export function connectorDefinition(spec: ConnectorSpec): CommandDefinition {
       } catch (error) {
         if (runtime.confirmation) return confirmation();
         if (runtime.completedWrites)
-          throw new ConnectorError(
+          throw new CliError(
             "outcome_unknown",
-            "Part of this external operation completed. Check the original objects before submitting again.",
+            // The CLI's own reason for the failed step is safe to show;
+            // TeamHub's carries its issues in details instead.
+            `Part of this external operation completed${
+              error instanceof CliError && error.origin === "local"
+                ? `, then a later step failed with ${error.code}: ${error.message}`
+                : ""
+            }. Check the original objects before submitting again.`,
             {
               ...(error instanceof CliError ? error.details : {}),
-              // The CLI's own reason for the failed step; TeamHub's errors
-              // carry theirs in issues already.
-              ...(error instanceof CliError &&
-              error.trustedMessage &&
-              error.details.issues === undefined
-                ? {
-                    issues: [
-                      { path: "cli", code: error.code, message: error.message },
-                    ],
-                  }
-                : {}),
               // A later rejected step cannot undo an earlier external write.
               operation_rejected: false,
               partial_receipts: [
@@ -446,20 +451,33 @@ export function connectorDefinition(spec: ConnectorSpec): CommandDefinition {
             error.code,
             error.message,
             { ...error.details, operation_rejected: true },
-            error.trustedMessage,
+            error.origin,
           );
         // Without a write attempt nothing reached the application, so a
         // local failure, such as an output path that cannot be written,
         // rejects the command instead of leaving its outcome unknown.
-        if (!runtime.writeAttempts)
-          throw new CliError(
-            "local_failure",
-            error instanceof Error
-              ? error.message
-              : "The command failed on this computer.",
-            { operation_rejected: true },
-            true,
-          );
+        if (!runtime.writeAttempts) {
+          // A failed save names --output; any other file stays generic.
+          const output =
+            typeof input.output === "string" &&
+            fileSystemError(error) &&
+            error.path !== undefined &&
+            path
+              .resolve(error.path)
+              .startsWith(path.dirname(path.resolve(input.output)));
+          const failure = !fileSystemError(error)
+            ? new CliError(
+                "internal_error",
+                "The command failed on this computer before anything was sent.",
+              )
+            : output
+              ? fileFailure(error, "--output", undefined, true)
+              : fileFailure(error);
+          throw new CliError(failure.code, failure.message, {
+            ...failure.details,
+            operation_rejected: true,
+          });
+        }
         throw error;
       }
     },
@@ -507,7 +525,6 @@ export class ConnectorRuntime {
   async stageDownloadedFile(remote: Json, slug: string): Promise<Json> {
     const { randomUUID } = await import("node:crypto");
     const { mkdir, rm } = await import("node:fs/promises");
-    const path = await import("node:path");
     const { saveConnectorDownload, snapshotConnectorFiles } =
       await import("./connector-files.js");
     const directory = path.join(
@@ -518,7 +535,7 @@ export class ConnectorRuntime {
     await mkdir(directory, { mode: 0o700, recursive: true });
     const name = requiredString(remote.name, "attachment filename");
     if (path.basename(name) !== name || name === "." || name === "..")
-      throw new ConnectorError(
+      throw new CliError(
         "incomplete_response",
         "The attachment filename is invalid.",
       );
@@ -530,7 +547,7 @@ export class ConnectorRuntime {
       );
       const [file] = await snapshotConnectorFiles([saved.path]);
       if (!file)
-        throw new ConnectorError(
+        throw new CliError(
           "incomplete_response",
           "Attachment snapshot is missing.",
         );
@@ -542,7 +559,7 @@ export class ConnectorRuntime {
   async stageFile(file: ConnectorFile, slug: string): Promise<Json> {
     const binding = this.bindings.find((x) => x.slug === slug);
     if (!binding)
-      throw new ConnectorError(
+      throw new CliError(
         "capability_unavailable",
         "The upload tool is not prepared.",
         { operation_rejected: true },
@@ -576,7 +593,7 @@ export class ConnectorRuntime {
         signal: AbortSignal.timeout(180000),
       });
     } catch {
-      throw new ConnectorError(
+      throw new CliError(
         "file_transfer_failed",
         "The input file could not be staged.",
         { operation_rejected: true },
@@ -584,7 +601,7 @@ export class ConnectorRuntime {
     }
     await response.body?.cancel();
     if (!response.ok)
-      throw new ConnectorError(
+      throw new CliError(
         "file_transfer_failed",
         "The file staging upload was rejected.",
         { operation_rejected: true },
@@ -638,15 +655,19 @@ export class ConnectorRuntime {
     if (this.confirmation) throw new ConfirmationRequested();
     const binding = this.bindings.find((x) => x.slug === slug);
     if (!binding)
-      throw new ConnectorError(
+      throw new CliError(
         "capability_unavailable",
         "This operation has no prepared tool binding.",
       );
-    if (!(await validateSchema(binding.schema, args)))
-      throw new ConnectorError(
+    const errors = await schemaErrors(binding.schema, args);
+    if (errors.length)
+      throw new CliError(
         "unsupported_combination",
         "The selected tool version cannot represent this request.",
-        { operation_rejected: true },
+        {
+          operation_rejected: true,
+          issues: ajvInputIssues(errors, args, { root: "arguments" }),
+        },
       );
     if (write) this.writeAttempts++;
     const response: Json = await teamHubData(
@@ -679,6 +700,13 @@ export async function validateSchema(
   schema: Json,
   value: unknown,
 ): Promise<boolean> {
+  return !(await schemaErrors(schema, value)).length;
+}
+/** The value's JSON Schema errors, every one of them; empty when it is valid. */
+export async function schemaErrors(
+  schema: Json,
+  value: unknown,
+): Promise<ErrorObject[]> {
   const imported = await import("ajv");
   // Native Node/Vitest synthesize CJS named exports, while the split bundle
   // exposes the CJS namespace under default. Keep both execution paths valid.
@@ -693,7 +721,12 @@ export async function validateSchema(
       draft2020.Ajv2020 ??
       (draft2020.default as unknown as { Ajv2020: typeof Ajv }).Ajv2020;
   }
-  const ajv = new Ajv({ strict: false, allErrors: true, logger: false });
+  const ajv = new Ajv({
+    strict: false,
+    allErrors: true,
+    verbose: true,
+    logger: false,
+  });
   const formats = await import("ajv-formats");
   const addFormats = (
     typeof formats.default === "function"
@@ -701,7 +734,7 @@ export async function validateSchema(
       : (formats.default as unknown as { default: unknown }).default
   ) as (validator: InstanceType<typeof Ajv>) => void;
   addFormats(ajv);
-  return Boolean(ajv.validate(schema, value));
+  return ajv.validate(schema, value) ? [] : [...(ajv.errors ?? [])];
 }
 function cursorAccount(value: unknown): string | undefined {
   if (value === undefined) return undefined;
@@ -717,7 +750,7 @@ function cursorAccount(value: unknown): string | undefined {
       throw new Error();
     return parsed.account;
   } catch {
-    throw new ConnectorError(
+    throw new CliError(
       "cursor_mismatch",
       "The cursor is invalid; use the previous page's returned cursor.",
     );
@@ -733,7 +766,7 @@ export function cursor(value: unknown, fingerprint: Json): Json {
       throw new Error();
     return record(parsed.state);
   } catch {
-    throw new ConnectorError(
+    throw new CliError(
       "cursor_mismatch",
       "Use the returned cursor with the same account and filters.",
     );

@@ -8,7 +8,7 @@ import {
   type ConnectorRuntime,
   type Json,
 } from "./connector-runtime.js";
-import { ConnectorError as CliError } from "./errors.js";
+import { CliError } from "./errors.js";
 
 /**
  * TeamHub runs Feishu Mail's tools itself, without Composio, through the

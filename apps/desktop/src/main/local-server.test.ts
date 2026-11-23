@@ -43,6 +43,7 @@ import {
   checkLocation,
   computerNotOnline,
   followHttps,
+  formatInstallJobFailure,
   hasNativePostgres,
   InstallerApi,
   installLocation,
@@ -128,8 +129,14 @@ if (args.includes("--inspect")) {
   fs.writeFileSync(path.join(home, "runtime", "inspect-args.json"), JSON.stringify(args));
   const hardware = { totalMemoryBytes: 64 * 1024 ** 3, diskFreeBytes: 200 * 1024 ** 3, gpus: [{ name: "RTX 4090" }] };
   const eligible = !fs.existsSync(path.join(target, "small-computer"));
+  const modelFile = path.join(target, "inspect-model");
+  const modelName = fs.existsSync(path.join(target, "unnamed-model"))
+    ? ""
+    : fs.existsSync(modelFile)
+      ? fs.readFileSync(modelFile, "utf8").trim()
+      : "qwen3-8b";
   const estimate = eligible
-    ? { model: fs.existsSync(path.join(target, "unnamed-model")) ? "" : "qwen3-8b", downloadBytes: 6 * 1024 ** 3, diskBytes: 8 * 1024 ** 3, memoryBytes: 12 * 1024 ** 3 }
+    ? { model: modelName, downloadBytes: 6 * 1024 ** 3, diskBytes: 8 * 1024 ** 3, memoryBytes: 12 * 1024 ** 3 }
     : { model: "", downloadBytes: null, diskBytes: null, memoryBytes: null };
   if (fs.existsSync(path.join(home, "tool-download"))) {
     // The first check downloads the localmodels tool, counted before the report.
@@ -144,9 +151,12 @@ if (args.includes("--inspect")) {
     process.exit(1);
   }
   process.stderr.write("Checked this computer in 1.5s.\n");
-  const lowMemory = eligible && fs.existsSync(path.join(target, "low-memory"));
-  const oldDriver = fs.existsSync(path.join(target, "old-driver"));
-  const reasons = oldDriver
+  const portBlocked = fs.existsSync(path.join(target, "port-in-use"));
+  const oldDriver = !portBlocked && fs.existsSync(path.join(target, "old-driver"));
+  const lowMemory = eligible && !portBlocked && !oldDriver && fs.existsSync(path.join(target, "low-memory"));
+  const reasons = portBlocked
+    ? [{ code: "gateway-port-in-use", message: "Gateway port 8080 is held by another process." }]
+    : oldDriver
     ? [
         {
           code: "cuda-driver-update-required",
@@ -168,14 +178,14 @@ if (args.includes("--inspect")) {
       ? [{ code: "free-memory-required", message: "Close other programs before installing.", freeBytes: 2899102924, requiredBytes: 13689304433 }]
       : []
     : [{ code: "facts-unavailable", message: "nvidia-smi was not found" }];
-  // With the plan priced on capacity, the installer recommends a runtime.
-  const recommendation = eligible && !lowMemory && !oldDriver ? "local-models" : "codex";
+  // With the plan priced on capacity or temporarily blocked, the installer recommends a runtime.
+  const recommendation = eligible && !lowMemory && !oldDriver && !portBlocked ? "local-models" : "codex";
   const local = {
-    eligible: eligible && !lowMemory && !oldDriver,
-    state: oldDriver || lowMemory ? "blocked-now" : eligible ? "ready" : "unavailable",
-    ...(lowMemory && !oldDriver ? { basis: "capacity", memory: { ramAvailableBytes: 2899102924, ramRequiredBytes: 13689304433 } } : {}),
+    eligible: eligible && !lowMemory && !oldDriver && !portBlocked,
+    state: portBlocked || oldDriver || lowMemory ? "blocked-now" : eligible ? "ready" : "unavailable",
+    ...(lowMemory ? { basis: "capacity", memory: { ramAvailableBytes: 2899102924, ramRequiredBytes: 13689304433 } } : {}),
   };
-  const finalEstimate = oldDriver ? { model: "", downloadBytes: null, diskBytes: null, memoryBytes: null } : estimate;
+  const finalEstimate = oldDriver || portBlocked ? { model: "", downloadBytes: null, diskBytes: null, memoryBytes: null } : estimate;
   process.stdout.write(JSON.stringify({ hardware, localModels: { ...local, reasons, estimate: finalEstimate }, recommendation }) + "\n");
   process.exit(0);
 }
@@ -268,7 +278,7 @@ const DONE = {
 // a retried job runs to DONE.
 const installerApi = (
   jobs: Record<string, unknown>[] = [],
-  finish: Record<string, unknown> = DONE,
+  finish: Record<string, unknown> | Record<string, unknown>[] = DONE,
   setup: Response = Response.json({ recommendation: "local-models" }),
   running: Record<string, unknown> | Record<string, unknown>[] = {
     state: "running",
@@ -277,6 +287,7 @@ const installerApi = (
   // Whether the instance's login exists before a job is created.
   installed = true,
 ) => {
+  const finishes = Array.isArray(finish) ? finish : [finish];
   const updates = [running].flat();
   const created: unknown[] = [];
   const retried: unknown[] = [];
@@ -340,9 +351,7 @@ const installerApi = (
         job(
           ++polls <= updates.length
             ? updates[polls - 1]!
-            : retried.length
-              ? DONE
-              : finish,
+            : (finishes[retried.length] ?? DONE),
         ),
       );
     if (url.pathname === `/api/instances/${LOCAL_INSTANCE}/login`)
@@ -807,29 +816,46 @@ describe("LocalServerModule", () => {
     expect(f.module.status().steps).toContain("signin");
     expect(f.enroll).not.toHaveBeenCalled();
 
-    // The runtime's own login runs in the installer; its page opens once.
+    // The runtime's own login runs in the installer. On Linux, Codex's
+    // browser login leaves its page to this app, which opens it once.
+    const oauth =
+      "https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&state=x";
+    api.runtime.login = { state: "waiting_user", url: oauth };
+    await f.module.startSignIn();
+    expect(api.runtime.logins).toEqual([
+      { instance: LOCAL_INSTANCE, method: "browser" },
+    ]);
+    expect(f.module.status().signIn).toEqual({
+      runtime: "codex",
+      state: "waiting_user",
+      url: oauth,
+    });
+    await waitForInstaller(() => expect(openExternal).toHaveBeenCalledTimes(1));
+    expect(openExternal).toHaveBeenCalledWith(oauth);
+
+    // A code for another device instead; its page opens too.
     api.runtime.login = {
       state: "waiting_user",
       url: "https://auth.openai.com/codex/device",
       deviceCode: "ABCD-1234",
     };
-    await f.module.startSignIn();
-    expect(api.runtime.logins).toEqual([{ instance: LOCAL_INSTANCE }]);
+    await f.module.startSignIn(undefined, true);
     expect(f.module.status().signIn).toEqual({
       runtime: "codex",
       state: "waiting_user",
       url: "https://auth.openai.com/codex/device",
       deviceCode: "ABCD-1234",
     });
-    await waitForInstaller(() => expect(openExternal).toHaveBeenCalledTimes(1));
-    expect(openExternal).toHaveBeenCalledWith(
+    await waitForInstaller(() => expect(openExternal).toHaveBeenCalledTimes(2));
+    expect(openExternal).toHaveBeenLastCalledWith(
       "https://auth.openai.com/codex/device",
     );
 
     // Claude Code's page shows a code to paste back.
     await f.module.startSignIn("pasted-code");
     expect(api.runtime.logins).toEqual([
-      { instance: LOCAL_INSTANCE },
+      { instance: LOCAL_INSTANCE, method: "browser" },
+      { instance: LOCAL_INSTANCE, method: "device" },
       { instance: LOCAL_INSTANCE, code: "pasted-code" },
     ]);
 
@@ -841,7 +867,7 @@ describe("LocalServerModule", () => {
       signIn: { runtime: "codex", state: "signed_in" },
     });
     expect(f.module.status().steps).toContain("signin");
-    expect(openExternal).toHaveBeenCalledTimes(1);
+    expect(openExternal).toHaveBeenCalledTimes(2);
     expect(f.enroll).toHaveBeenCalled();
     expect(f.host.ctx.config.get().runtimeEnvironment).toEqual(
       api.runtime.environment,
@@ -925,6 +951,77 @@ describe("LocalServerModule", () => {
       signIn: { runtime: "claude", state: "signed_in" },
     });
     expect(openExternal).toHaveBeenCalledTimes(1);
+    await f.host.stop("quit");
+  });
+
+  it("says when no browser opens, and why a sign-in ended", async () => {
+    const api = installerApi([], {
+      state: "succeeded",
+      origin: "http://localhost:3000",
+      stages: [{ id: "runtime", state: "waiting_user" }],
+    });
+    api.runtime.setupChoice = "codex";
+    api.runtime.login = { state: "idle" };
+    const openExternal = vi.fn(async (_url: string): Promise<void> => {
+      throw new Error("xdg-open exited with 3");
+    });
+    const f = fixture(
+      (home) => ({ ...withCheckout(home), openExternal, signInPollMs: 5 }),
+      {},
+      checkout,
+      api,
+    );
+    await f.host.start();
+    const done = f.module.begin();
+    await waitForInstaller(() =>
+      expect(f.module.status().signIn?.state).toBe("required"),
+    );
+    const login = {
+      state: "waiting_user" as const,
+      url: "https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&state=x",
+    };
+    api.runtime.login = login;
+    await f.module.startSignIn();
+    // No browser opened: the step says so, and the next checks keep it.
+    await waitForInstaller(() =>
+      expect(f.module.status().signIn).toEqual({
+        runtime: "codex",
+        ...login,
+        browserFailed: true,
+      }),
+    );
+    await delay(30);
+    expect(f.module.status().signIn?.browserFailed).toBe(true);
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    // Opening it by hand works now.
+    openExternal.mockResolvedValueOnce(undefined);
+    await f.module.openSignInPage();
+    expect(f.module.status().signIn).toEqual({ runtime: "codex", ...login });
+
+    // The installer says why it ended; the step keeps the reason.
+    api.runtime.login = {
+      state: "failed",
+      reason: "timed_out",
+      message: "Sign-in timed out. Retry or sign in later.",
+    };
+    await waitForInstaller(() =>
+      expect(f.module.status().signIn).toEqual({
+        runtime: "codex",
+        state: "failed",
+        reason: "timed_out",
+        message: "Sign-in timed out. Retry or sign in later.",
+      }),
+    );
+    api.runtime.login = { state: "idle" };
+    await delay(30);
+    expect(f.module.status().signIn?.reason).toBe("timed_out");
+
+    api.runtime.login = { state: "ready" };
+    await done;
+    expect(f.module.status().signIn).toEqual({
+      runtime: "codex",
+      state: "signed_in",
+    });
     await f.host.stop("quit");
   });
 
@@ -1732,6 +1829,28 @@ describe("LocalServerModule", () => {
     info.mockRestore();
   });
 
+  it("marks checked Inkling 2 Mini models with featuredInkling using the shared matcher", async () => {
+    const f = fixture({ checkout: "/src" }, {}, (home) => {
+      mkdirSync(home, { recursive: true });
+      writeFileSync(
+        path.join(home, "inspect-model"),
+        "thinkingmachines/Inkling-2-Mini",
+      );
+    });
+    await f.host.start();
+    f.module.inspect();
+    await waitForInstaller(() =>
+      expect(f.module.status().localModels).toMatchObject({
+        state: "checked",
+        eligible: true,
+        model: {
+          name: "thinkingmachines/Inkling-2-Mini",
+          featuredInkling: true,
+        },
+      }),
+    );
+  });
+
   it("forwards validated CUDA driver versions without leaking tool prose", async () => {
     const info = vi.spyOn(silentLog, "info");
     const f = fixture({ checkout: "/src" }, {}, (home) => {
@@ -1823,6 +1942,26 @@ describe("LocalServerModule", () => {
     info.mockRestore();
   });
 
+  it("marks localModels blockedNow even when plan is null (such as gateway-port-in-use)", async () => {
+    const f = fixture({ checkout: "/src" }, {}, (home) => {
+      mkdirSync(home, { recursive: true });
+      writeFileSync(path.join(home, "port-in-use"), "");
+    });
+    await f.host.start();
+    f.module.inspect();
+    await waitForInstaller(() =>
+      expect(f.module.status().localModels).toMatchObject({
+        state: "checked",
+        eligible: false,
+        blockedNow: true,
+        reasons: [{ code: "gateway-port-in-use" }],
+        recommendation: "codex",
+      }),
+    );
+    expect(f.module.status().localModels).not.toHaveProperty("model");
+    await f.host.stop("quit");
+  });
+
   it("approves the deployment of the chosen local model", async () => {
     const api = installerApi([], {
       state: "waiting_user",
@@ -1862,6 +2001,53 @@ describe("LocalServerModule", () => {
     await f.host.stop("quit");
   });
 
+  it("does not replan on binding-unavailable and reports the structured reason", async () => {
+    const f = fixture(
+      withCheckout,
+      {},
+      checkout,
+      installerApi([], {
+        state: "waiting_user",
+        errorCode: "LOCAL_MODELS_RECOVERY_REQUIRED",
+        errorReasons: ["binding-unavailable"],
+        message:
+          "The upstream tool could not verify the local stack binding: Restore the existing install and try again.",
+      }),
+    );
+    await f.host.start();
+    await expect(f.module.begin({ runtime: "local" })).rejects.toThrow(
+      "The local model stack couldn't be checked. Local model setup couldn't finish or verify this computer's local model state and Pi configuration. Check folder permissions or repair the existing installation and try again, or choose another AI runtime.",
+    );
+    expect(f.api.retried).toEqual([]);
+    await f.host.stop("quit");
+  });
+
+  it("reports a repairable setup or verification error without double periods for LOCAL_MODELS_RECOVERY_REQUIRED", () => {
+    const formatted = formatInstallJobFailure({
+      errorCode: "LOCAL_MODELS_RECOVERY_REQUIRED",
+      message:
+        "The upstream tool could not verify the local stack binding: Pi's configuration or this computer's state cannot be read safely. Restore the existing install and try again.. Existing resources were preserved.",
+    });
+    expect(formatted).not.toContain("can't run the local model");
+    expect(formatted).toContain(
+      "couldn't finish or verify this computer's local model state and Pi configuration",
+    );
+    expect(formatted).toContain("Check folder permissions or repair");
+    expect(formatted).not.toContain("..");
+    expect(formatted).toContain(
+      "Restore the existing install and try again. Existing resources were preserved.",
+    );
+
+    const withReason = formatInstallJobFailure({
+      errorCode: "LOCAL_MODELS_RECOVERY_REQUIRED",
+      message: "The upstream tool could not verify the local stack binding.",
+      errorReasons: ["binding-unavailable"],
+    });
+    expect(withReason).toBe(
+      "The local model stack couldn't be checked. Local model setup couldn't finish or verify this computer's local model state and Pi configuration. Check folder permissions or repair the existing installation and try again, or choose another AI runtime.",
+    );
+  });
+
   it("asks to free memory only when no local model fits", async () => {
     const f = fixture(
       withCheckout,
@@ -1877,6 +2063,226 @@ describe("LocalServerModule", () => {
       "Close other programs to free memory",
     );
     await f.host.stop("quit");
+  });
+
+  it("reports Hub reachability and disk failures accurately without blaming memory", async () => {
+    for (const [causeCode, expected, forbidden] of [
+      [
+        "HUB_UNREACHABLE",
+        "Couldn't reach the model download service",
+        "free memory",
+      ],
+      ["DISK_INSUFFICIENT", "enough free disk space", "free memory"],
+      [
+        "GPU_CONFLICT",
+        "Choose another AI runtime and try again.",
+        "free memory",
+      ],
+      [
+        "STACK_PLAN_FAILED",
+        "Choose another AI runtime and try again.",
+        "free memory",
+      ],
+      ["MEMORY_INSUFFICIENT", "Close other programs to free memory", "disk"],
+    ] as const) {
+      const f = fixture(
+        withCheckout,
+        {},
+        checkout,
+        installerApi([], {
+          state: "waiting_user",
+          errorCode: "LOCAL_MODELS_UNAVAILABLE",
+          errorCauseCode: causeCode,
+          message: `upstream cause ${causeCode}`,
+        }),
+      );
+      await f.host.start();
+      const failure = f.module.begin({ runtime: "local" });
+      await expect(failure).rejects.toThrow(expected);
+      await expect(failure).rejects.not.toThrow(forbidden);
+      await f.host.stop("quit");
+    }
+  });
+
+  it("retries the approved plan once on interrupted download instead of blind replanning", async () => {
+    const planId = "a".repeat(64);
+    const f = fixture(
+      withCheckout,
+      {},
+      checkout,
+      installerApi(
+        [],
+        [
+          {
+            state: "waiting_user",
+            errorCode: "LOCAL_MODELS_APPROVAL_REQUIRED",
+            localModelsPlan: { planId },
+          },
+          {
+            state: "waiting_user",
+            errorCode: "LOCAL_MODELS_RECOVERY_REQUIRED",
+            errorCauseCode: "STACK_COMPONENT_FAILED",
+            message: "Local model setup failed at: llm.",
+          },
+          DONE,
+        ],
+      ),
+    );
+    await f.host.start();
+    await f.module.begin({ runtime: "local" });
+    expect(f.api.retried).toEqual([
+      { localModelsApproval: planId },
+      { localModelsApproval: planId },
+    ]);
+    expect(f.module.status().phase).toBe("ready");
+    await f.host.stop("quit");
+  });
+
+  it("stops without blind replanning when retrying the approved plan fails again with STACK_COMPONENT_FAILED", async () => {
+    const planId = "a".repeat(64);
+    const f = fixture(
+      withCheckout,
+      {},
+      checkout,
+      installerApi(
+        [],
+        [
+          {
+            state: "waiting_user",
+            errorCode: "LOCAL_MODELS_APPROVAL_REQUIRED",
+            localModelsPlan: { planId },
+          },
+          {
+            state: "waiting_user",
+            errorCode: "LOCAL_MODELS_RECOVERY_REQUIRED",
+            errorCauseCode: "STACK_COMPONENT_FAILED",
+            message: "Local model setup failed at: llm.",
+          },
+          {
+            state: "waiting_user",
+            errorCode: "LOCAL_MODELS_RECOVERY_REQUIRED",
+            errorCauseCode: "STACK_COMPONENT_FAILED",
+            message: "Local model setup failed at: llm.",
+          },
+        ],
+      ),
+    );
+    await f.host.start();
+    const failure = f.module.begin({ runtime: "local" });
+    await expect(failure).rejects.toThrow(
+      "Local model download or setup was interrupted",
+    );
+    await expect(failure).rejects.not.toThrow("free memory");
+    expect(f.api.retried).toEqual([
+      { localModelsApproval: planId },
+      { localModelsApproval: planId },
+    ]);
+    await f.host.stop("quit");
+  });
+
+  it("still replans once when an approved plan fails with a non-retryable recovery cause", async () => {
+    for (const causeCode of ["STACK_PLAN_CHANGED", "SEARCH_UNAVAILABLE"]) {
+      const firstPlan = "a".repeat(64);
+      const secondPlan = "b".repeat(64);
+      const f = fixture(
+        withCheckout,
+        {},
+        checkout,
+        installerApi(
+          [],
+          [
+            {
+              state: "waiting_user",
+              errorCode: "LOCAL_MODELS_APPROVAL_REQUIRED",
+              localModelsPlan: { planId: firstPlan },
+            },
+            {
+              state: "waiting_user",
+              errorCode: "LOCAL_MODELS_RECOVERY_REQUIRED",
+              errorCauseCode: causeCode,
+            },
+            {
+              state: "waiting_user",
+              errorCode: "LOCAL_MODELS_APPROVAL_REQUIRED",
+              localModelsPlan: { planId: secondPlan },
+            },
+            DONE,
+          ],
+        ),
+      );
+      await f.host.start();
+      await f.module.begin({ runtime: "local" });
+      expect(f.api.retried).toEqual([
+        { localModelsApproval: firstPlan },
+        { localModelsReplan: true },
+        { localModelsApproval: secondPlan },
+      ]);
+      expect(f.module.status().phase).toBe("ready");
+      await f.host.stop("quit");
+    }
+  });
+
+  it("replans once when STACK_COMPONENT_FAILED arrives without a prior approval in this run", async () => {
+    const replannedPlan = "c".repeat(64);
+    const f = fixture(
+      withCheckout,
+      {},
+      checkout,
+      installerApi(
+        [],
+        [
+          {
+            state: "waiting_user",
+            errorCode: "LOCAL_MODELS_RECOVERY_REQUIRED",
+            errorCauseCode: "STACK_COMPONENT_FAILED",
+            message: "Local model setup failed at: llm.",
+          },
+          {
+            state: "waiting_user",
+            errorCode: "LOCAL_MODELS_APPROVAL_REQUIRED",
+            localModelsPlan: { planId: replannedPlan },
+          },
+          DONE,
+        ],
+      ),
+    );
+    await f.host.start();
+    await f.module.begin({ runtime: "local" });
+    expect(f.api.retried).toEqual([
+      { localModelsReplan: true },
+      { localModelsApproval: replannedPlan },
+    ]);
+    expect(f.module.status().phase).toBe("ready");
+    await f.host.stop("quit");
+  });
+
+  it("emits local-server.busy while installing and releases it on both success and failure", async () => {
+    const events: boolean[] = [];
+    const ok = fixture(withCheckout, {}, checkout, installerApi());
+    ok.bus.on("local-server.busy", (busy) => events.push(busy));
+    await ok.host.start();
+    await ok.module.begin({ runtime: "local" });
+    expect(events).toEqual([true, false]);
+    await ok.host.stop("quit");
+
+    events.length = 0;
+    const failed = fixture(
+      withCheckout,
+      {},
+      checkout,
+      installerApi([], {
+        state: "waiting_user",
+        errorCode: "LOCAL_MODELS_UNAVAILABLE",
+        errorCauseCode: "HUB_UNREACHABLE",
+      }),
+    );
+    failed.bus.on("local-server.busy", (busy) => events.push(busy));
+    await failed.host.start();
+    await expect(failed.module.begin({ runtime: "local" })).rejects.toThrow(
+      "model download service",
+    );
+    expect(events).toEqual([true, false]);
+    await failed.host.stop("quit");
   });
 
   it("starts again past an attempt that stopped waiting for the person", async () => {
@@ -3183,6 +3589,152 @@ describe("LocalServerModule after a restart", () => {
     expect(f.showStartFailed).toHaveBeenCalledWith(
       "The local model's Pi can't load extensions, which every Linger run needs. The upstream tool could not verify the local stack binding. Try Again to apply the approved local model plan again, or Set Up Again to review a new plan or choose another AI runtime.",
     );
+    await f.host.stop("quit");
+  });
+
+  it.each([
+    "STACK_REPLAN_FAILED",
+    "STACK_PLAN_CHANGED",
+    "STACK_APPROVAL_MISMATCH",
+    "STACK_PLAN_INVALID",
+  ])(
+    "guides to Set Up Again when an upgraded client cannot re-apply the saved plan (%s)",
+    async (causeCode) => {
+      const root = tempDirectory();
+      const archive = sourceArchive(root);
+      const f = installedBy(archive);
+      const previous = path.join(f.home, "desktop", "source", "previous");
+      writeFileSync(
+        path.join(f.home, "resume-fails"),
+        JSON.stringify({
+          message:
+            "Local model installation or verification did not finish: The saved local model plan no longer fits this computer's current memory or model catalog. Existing resources were preserved.",
+          details: {
+            code: "LOCAL_MODELS_RECOVERY_REQUIRED",
+            causeCode,
+            reasons: ["deployment-unavailable"],
+          },
+        }),
+      );
+      await f.host.start();
+      await vi.waitFor(() => expect(f.module.status().phase).toBe("failed"));
+      expect(f.showStartFailed).toHaveBeenCalledWith(
+        "The local model service isn't running. Local model installation or verification did not finish: The saved local model plan no longer fits this computer's current memory or model catalog. Existing resources were preserved. Set Up Again to review a new plan or choose another AI runtime.",
+      );
+      // The older source record stays in place until the upgrade succeeds.
+      expect(
+        JSON.parse(
+          readFileSync(
+            path.join(f.home, "desktop", "local-server.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({ repo: previous });
+      await f.host.stop("quit");
+    },
+  );
+
+  it("still offers Try Again when a local model resume failure is transient (STACK_APPLY_LOCKED)", async () => {
+    const f = fixture({}, enrolled, (home) => {
+      record(home);
+      writeFileSync(
+        path.join(home, "resume-fails"),
+        JSON.stringify({
+          message:
+            "Local model installation or verification did not finish: Another local model operation is already running. Existing resources were preserved.",
+          details: {
+            code: "LOCAL_MODELS_RECOVERY_REQUIRED",
+            causeCode: "STACK_APPLY_LOCKED",
+            reasons: ["deployment-unavailable"],
+          },
+        }),
+      );
+    });
+    await f.host.start();
+    await vi.waitFor(() => expect(f.module.status().phase).toBe("failed"));
+    expect(f.showStartFailed).toHaveBeenCalledWith(
+      "The local model service isn't running. Local model installation or verification did not finish: Another local model operation is already running. Existing resources were preserved. Try Again to apply the approved local model plan again, or Set Up Again to review a new plan or choose another AI runtime.",
+    );
+    await f.host.stop("quit");
+  });
+
+  it("recovers from an upgrade replan failure through Set Up Again by replanning automatically", async () => {
+    const root = tempDirectory();
+    const archive = sourceArchive(root);
+    const api = installerApi([], {
+      state: "waiting_user",
+      errorCode: "LOCAL_MODELS_RECOVERY_REQUIRED",
+      message: "The saved local model plan no longer fits.",
+    });
+    api.runtime.setupChoice = "local-models";
+    const f = fixture(
+      {
+        sourceArchive: {
+          url: "https://cdn.example/linger.tar.gz",
+          sha256: archive.sha256,
+        },
+        fetch: (async (url: string | URL | Request) => {
+          if (String(url).startsWith("https://cdn.example/"))
+            return new Response(archive.bytes);
+          return new Response(null, { status: 200 });
+        }) as typeof fetch,
+      },
+      enrolled,
+      (home) => {
+        const sources = path.join(home, "desktop", "source");
+        unpackedSource(path.join(sources, "previous"));
+        writeFileSync(
+          path.join(home, "desktop", "local-server.json"),
+          JSON.stringify({
+            home,
+            repo: path.join(sources, "previous"),
+            origin: "http://localhost:3000",
+            version: "0.1.4",
+          }),
+        );
+        writeFileSync(
+          path.join(home, "resume-fails"),
+          JSON.stringify({
+            message:
+              "Local model installation or verification did not finish: The saved local model plan no longer fits this computer's current memory or model catalog. Existing resources were preserved.",
+            details: {
+              code: "LOCAL_MODELS_RECOVERY_REQUIRED",
+              causeCode: "STACK_REPLAN_FAILED",
+              reasons: ["deployment-unavailable"],
+            },
+          }),
+        );
+      },
+      api,
+    );
+    await f.host.start();
+    await vi.waitFor(() => expect(f.module.status().phase).toBe("failed"));
+    expect(f.showStartFailed).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Set Up Again to review a new plan or choose another AI runtime.",
+      ),
+    );
+    // Set Up Again forgets the stale local-server record and opens setup.
+    const opened = vi.fn();
+    f.bus.on("setup.open", opened);
+    f.bus.emit("local-server.reset");
+    await vi.waitFor(() => expect(opened).toHaveBeenCalledOnce());
+    expect(existsSync(path.join(f.home, "desktop", "local-server.json"))).toBe(
+      false,
+    );
+    // Re-installing with local models replans automatically and finishes on
+    // the upgraded client's source package.
+    await f.module.begin({ runtime: "local" });
+    expect(f.api.retried).toEqual([{ localModelsReplan: true }]);
+    expect(f.module.status().phase).toBe("ready");
+    expect(
+      JSON.parse(
+        readFileSync(path.join(f.home, "desktop", "local-server.json"), "utf8"),
+      ),
+    ).toMatchObject({
+      repo: path.join(f.home, "desktop", "source", archive.sha256.slice(0, 16)),
+      version: APP_VERSION,
+    });
     await f.host.stop("quit");
   });
 

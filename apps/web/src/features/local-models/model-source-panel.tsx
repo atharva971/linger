@@ -19,12 +19,13 @@ import { RichMessage, useT } from "@/i18n/use-translation";
 import { cn } from "@/lib/cn";
 
 import {
-  modelSourceErrorCopy,
+  modelSourceFailureCopy,
   modelSourceModeLabels,
   modelSourceRuntimeLabels,
 } from "./local-models-copy";
 import { localModelsMessages as m } from "./local-models.messages";
 import {
+  invalidateOfflineComputer,
   type LocalModel,
   tenantLocalModelsQueryKey,
 } from "./local-models-queries";
@@ -90,11 +91,18 @@ export function useModelSourceSwitch({
     mutationFn: (body: ModelSourceSwitchRequest) =>
       switchModelSource(client, tenantId, computerId, body),
     onError: (error, body) => {
-      // A switch can fail after the Computer changed (work started meanwhile,
-      // or no answer in time), so show what it serves now.
-      void queryClient.invalidateQueries({
-        queryKey: modelSourceQueryKey(tenantId, computerId),
-      });
+      if (
+        error instanceof TeamHubError &&
+        error.code === "LOCAL_COMPUTER_OFFLINE"
+      ) {
+        void invalidateOfflineComputer(queryClient, tenantId, computerId);
+      } else {
+        // A switch can fail after the Computer changed (work started meanwhile,
+        // or no answer in time), so show what it serves now.
+        void queryClient.invalidateQueries({
+          queryKey: modelSourceQueryKey(tenantId, computerId),
+        });
+      }
       if (
         error instanceof TeamHubError &&
         error.code === "AGENT_HAS_ACTIVE_RUNS"
@@ -125,16 +133,16 @@ export function useModelSourceSwitch({
       ]);
     },
   });
-  const failureCode =
-    mutation.error instanceof TeamHubError ? mutation.error.code : undefined;
+  const failureError =
+    mutation.error instanceof TeamHubError ? mutation.error : undefined;
   const switcher: ModelSourceSwitcher = {
     clearFeedback: () => {
       setSwitched(null);
       if (mutation.isError) mutation.reset();
     },
     failure:
-      mutation.isError && failureCode !== "AGENT_HAS_ACTIVE_RUNS"
-        ? modelSourceErrorCopy(failureCode, t)
+      mutation.isError && failureError?.code !== "AGENT_HAS_ACTIVE_RUNS"
+        ? modelSourceFailureCopy(failureError, t)
         : undefined,
     pending: mutation.isPending ? mutation.variables : undefined,
     request: (body) => mutation.mutate(body),

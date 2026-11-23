@@ -54,7 +54,11 @@ import { prepareRuntime, type RuntimeDescriptor } from "./managed-runtimes.js";
 import { managedRuntimeEnvironment } from "./managed-codex.js";
 import { applyNativeSource, prepareByokRuntime } from "./byok-source.js";
 import { atomicPrivate, privateDirectory } from "./instance.js";
-import { prepareLocalModels, restoreByokSource } from "./local-models.js";
+import {
+  prepareLocalModels,
+  restoreByokSource,
+  restoreLocalModels,
+} from "./local-models.js";
 import {
   inspectNativeListeners,
   inspectNativeProcess,
@@ -92,6 +96,7 @@ vi.mock("./local-models.js", async (original) => ({
   ...(await original<typeof import("./local-models.js")>()),
   prepareLocalModels: vi.fn(async () => undefined),
   restoreByokSource: vi.fn(async () => undefined),
+  restoreLocalModels: vi.fn(async () => undefined),
 }));
 vi.mock("./managed-runtimes.js", () => ({
   runtimeVersionFailure: vi.fn(() => undefined),
@@ -370,6 +375,7 @@ async function restartAfter(
   vi.mocked(prepareRuntime).mockClear();
   vi.mocked(prepareModelGateway).mockClear();
   vi.mocked(restoreByokSource).mockClear();
+  vi.mocked(restoreLocalModels).mockClear();
   if (typeof restartRuntime === "function")
     vi.mocked(prepareRuntime).mockImplementation(restartRuntime);
   else if (restartRuntime)
@@ -411,6 +417,60 @@ test.each(["codex", "local-models"] as const)(
       expect.anything(),
       { runtime: "pi", modelSource: "byok" },
       expect.anything(),
+    );
+  },
+);
+
+test.each(["byok", "subscription"] as const)(
+  "upgrading an instance whose model source was switched to %s leaves local models stopped",
+  async (mode) => {
+    const f = await fixture();
+    vi.mocked(prepareRuntime).mockResolvedValue({
+      code: 0,
+      state: "ready",
+      message: "ok",
+    });
+    await installNativeSource({
+      home: f.home,
+      repo: f.repo,
+      name: "native-upgrade-switched",
+      setupChoice: "local-models",
+      signal: new AbortController().signal,
+      onEvent: () => {},
+    });
+    await saveModelSource(f.home, mode, "claude");
+    vi.mocked(prepareLocalModels).mockClear();
+    vi.mocked(applyNativeSource).mockClear();
+    vi.mocked(restoreByokSource).mockClear();
+    // A version upgrade (--resume on a newer checkout) passes no setupChoice.
+    const upgraded = await installNativeSource({
+      home: f.home,
+      repo: f.repo,
+      name: "native-upgrade-switched",
+      signal: new AbortController().signal,
+      onEvent: () => {},
+    });
+    expect(upgraded.code).toBe(0);
+    expect(prepareLocalModels).not.toHaveBeenCalled();
+    expect(applyNativeSource).not.toHaveBeenCalled();
+    if (mode === "byok") expect(restoreByokSource).toHaveBeenCalledTimes(1);
+    else expect(restoreByokSource).not.toHaveBeenCalled();
+    // Explicitly choosing local models again via Set Up Again restores them.
+    const explicit = await installNativeSource({
+      home: f.home,
+      repo: f.repo,
+      name: "native-upgrade-switched",
+      setupChoice: "local-models",
+      signal: new AbortController().signal,
+      onEvent: () => {},
+    });
+    expect(explicit.code).toBe(0);
+    expect(prepareLocalModels).toHaveBeenCalledTimes(1);
+    expect(applyNativeSource).toHaveBeenCalledWith(
+      path.resolve(f.home),
+      "local",
+      "pi",
+      { signal: expect.any(AbortSignal), onEvent: expect.any(Function) },
     );
   },
 );
@@ -528,7 +588,94 @@ test("a restart keeps a saved local source as before", async () => {
   expect(applyNativeSource).not.toHaveBeenCalled();
   expect(restoreByokSource).not.toHaveBeenCalled();
 });
+test("a cold resume preserves a saved local model source even when setup-choice is a subscription runtime", async () => {
+  const f = await fixture();
+  vi.mocked(prepareRuntime).mockResolvedValue({
+    code: 0,
+    state: "ready",
+    message: "ok",
+  });
+  await installNativeSource({
+    home: f.home,
+    repo: f.repo,
+    name: "native-flow",
+    setupChoice: "codex",
+    signal: new AbortController().signal,
+    onEvent: () => {},
+  });
+  const state = path.join(f.home, "runtime", "localmodels", "state");
+  await privateDirectory(state);
+  await atomicPrivate(
+    path.join(state, "model-source.json"),
+    JSON.stringify({
+      schema: "localmodels.model-source/v1",
+      mode: "local",
+      runtime: "pi",
+      runtime_model:
+        "localmodels-library/localmodels-lib-qwen3-8-27b/Qwen3.8-27B-UD-Q4_K_M",
+      model_label: "Qwen3.8 27B",
+      gateway_url: "http://127.0.0.1:18480",
+      environment: {},
+    }),
+  );
+  vi.mocked(applyNativeSource).mockClear();
+  vi.mocked(prepareLocalModels).mockClear();
+  vi.mocked(prepareRuntime).mockClear();
+  vi.mocked(restoreLocalModels).mockClear();
+  vi.mocked(prepareRuntime).mockResolvedValue({
+    code: 4,
+    state: "action_required",
+    message: "sign in later",
+    details: { code: "RUNTIME_AUTH_REQUIRED" },
+  });
 
+  const result = await installNativeSource({
+    home: f.home,
+    repo: f.repo,
+    name: "native-flow",
+    resume: true,
+    signal: new AbortController().signal,
+    onEvent: () => {},
+  });
+  expect(result.code).toBe(0);
+  expect(vi.mocked(prepareRuntime).mock.calls[0]?.[0]).toBe("pi");
+  expect(vi.mocked(prepareRuntime).mock.calls[0]?.[1]?.reuseInstalled).toBe(
+    true,
+  );
+  expect(restoreLocalModels).toHaveBeenCalled();
+  expect(applyNativeSource).not.toHaveBeenCalled();
+  expect(restoreByokSource).not.toHaveBeenCalled();
+});
+
+test("a cold resume degrades a saved local library model failure into localModelsDegraded without blocking startup", async () => {
+  vi.mocked(restoreLocalModels).mockResolvedValueOnce({
+    code: 1,
+    state: "failed",
+    message: "Could not reload local model qwen3.8-27b:UD-Q4_K_M: Out of VRAM.",
+    details: { code: "LOAD_NO_ROOM" },
+  });
+  const { result } = await restartAfter(
+    "codex",
+    {
+      mode: "local",
+      runtime: "pi",
+    },
+    undefined,
+    { resume: true },
+  );
+  expect(result).toMatchObject({
+    code: 0,
+    state: "ready",
+    details: {
+      localModelsDegraded: {
+        code: "LOAD_NO_ROOM",
+        message:
+          "Could not reload local model qwen3.8-27b:UD-Q4_K_M: Out of VRAM.",
+      },
+    },
+  });
+  expect(applyNativeSource).not.toHaveBeenCalled();
+});
 test("only TeamHub's process gets the server identity key", async () => {
   const f = await fixture();
   vi.mocked(prepareRuntime).mockResolvedValue({
@@ -2574,4 +2721,99 @@ test("a repeated resume after a successful resume succeeds without provisioning 
   const afterFirstResume = owners();
   expect((await installNativeSource({ ...input, resume: true })).code).toBe(0);
   expect(owners()).toBe(afterFirstResume);
+});
+
+test("a cold resume degrades gracefully instead of blocking when local models cannot be verified", async () => {
+  const f = await fixture();
+  const name = "native-flow-local-models-degraded-resume";
+  vi.mocked(prepareLocalModels).mockResolvedValueOnce(undefined);
+  const installed = await installNativeSource({
+    ...f,
+    name,
+    setupChoice: "local-models",
+    externalComputer: true,
+    signal: new AbortController().signal,
+    onEvent: () => {},
+  });
+  expect(installed.code).toBe(0);
+  const saved = await loadInstance({ name, home: f.home });
+  await stopNativeSource(saved!, new AbortController().signal);
+
+  vi.mocked(prepareLocalModels).mockResolvedValueOnce({
+    code: 4,
+    state: "action_required",
+    message: "The upstream tool could not verify the local stack binding.",
+    details: {
+      code: "LOCAL_MODELS_RECOVERY_REQUIRED",
+      reasons: ["binding-unavailable"],
+    },
+  });
+  vi.mocked(prepareModelGateway).mockRejectedValueOnce(
+    new Error("local model gateway unavailable"),
+  );
+  const logs: string[] = [];
+  const resumed = await installNativeSource({
+    ...f,
+    name,
+    externalComputer: true,
+    resume: true,
+    signal: new AbortController().signal,
+    onEvent: (event) => {
+      if (event.kind === "log") logs.push(event.message);
+    },
+  });
+  expect(resumed).toMatchObject({
+    code: 0,
+    state: "ready",
+    details: {
+      localModelsDegraded: {
+        code: "LOCAL_MODELS_RECOVERY_REQUIRED",
+        message: "The upstream tool could not verify the local stack binding.",
+        reasons: ["binding-unavailable"],
+      },
+    },
+  });
+  expect(logs.join("")).toContain("Linger is starting without local models");
+});
+
+test("a cold resume degrades gracefully when local model preparation throws", async () => {
+  const f = await fixture();
+  const name = "native-flow-local-models-throw-resume";
+  vi.mocked(prepareLocalModels).mockResolvedValueOnce(undefined);
+  const installed = await installNativeSource({
+    ...f,
+    name,
+    setupChoice: "local-models",
+    externalComputer: true,
+    signal: new AbortController().signal,
+    onEvent: () => {},
+  });
+  expect(installed.code).toBe(0);
+  const saved = await loadInstance({ name, home: f.home });
+  await stopNativeSource(saved!, new AbortController().signal);
+
+  vi.mocked(prepareLocalModels).mockRejectedValueOnce(
+    new Error("Invalid upstream local model binding."),
+  );
+  vi.mocked(prepareModelGateway).mockRejectedValueOnce(
+    new Error("local model gateway unavailable"),
+  );
+  const resumed = await installNativeSource({
+    ...f,
+    name,
+    externalComputer: true,
+    resume: true,
+    signal: new AbortController().signal,
+    onEvent: () => {},
+  });
+  expect(resumed).toMatchObject({
+    code: 0,
+    state: "ready",
+    details: {
+      localModelsDegraded: {
+        code: "LOCAL_MODELS_RECOVERY_REQUIRED",
+        message: "Invalid upstream local model binding.",
+      },
+    },
+  });
 });

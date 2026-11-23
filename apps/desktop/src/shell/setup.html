@@ -95,9 +95,9 @@
         display: flex;
         flex-direction: column;
         min-height: 0;
-        width: min(100%, 568px);
+        width: min(100%, 600px);
         margin: 0 auto;
-        padding: 28px 24px 22px;
+        padding: 20px 24px 16px;
         text-align: center;
       }
       section {
@@ -480,6 +480,12 @@
         overflow-y: auto;
         padding-bottom: 40px;
       }
+      section[data-step="welcome"] {
+        padding-bottom: 0;
+      }
+      section[data-step="welcome"] .eyebrow {
+        margin-top: auto;
+      }
       h1 {
         margin-bottom: 8px;
         font-size: 26px;
@@ -498,23 +504,36 @@
       section[data-customizing="true"] {
         padding-bottom: 0;
       }
+      section[data-customizing="true"] h1 {
+        margin-bottom: 2px;
+        font-size: 22px;
+        line-height: 28px;
+      }
+      section[data-customizing="true"] .lead {
+        font-size: 12.5px;
+      }
       section[data-customizing="true"] .eyebrow,
       section[data-customizing="true"] .plan-line .sep,
-      section[data-customizing="true"] #plan-summary {
+      section[data-customizing="true"] #plan-summary,
+      section[data-customizing="true"] #plan-featured-badge,
+      section[data-customizing="true"] .spotlight-card {
         display: none;
       }
       section[data-customizing="true"] .start {
-        padding-top: 16px;
+        padding-top: 10px;
+      }
+      section[data-customizing="true"] .primary.large {
+        min-height: 40px;
       }
       section[data-customizing="true"] .plan-line {
-        margin-top: 8px;
+        margin-top: 6px;
       }
       .eyebrow {
         display: inline-flex;
         align-self: center;
         align-items: center;
         gap: 6px;
-        margin-bottom: 14px;
+        margin-bottom: 10px;
         padding: 3px 10px 3px 8px;
         border: 1px solid var(--line);
         border-radius: 999px;
@@ -533,7 +552,7 @@
         display: flex;
         flex-direction: column;
         align-items: center;
-        padding-top: 24px;
+        padding-top: 16px;
       }
       .primary.large {
         position: relative;
@@ -590,10 +609,100 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 8px;
-        margin-top: 14px;
+        flex-wrap: wrap;
+        gap: 4px 6px;
+        margin-top: 11px;
         color: var(--faint);
-        font-size: 12px;
+        font-size: 11.5px;
+      }
+      .featured-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 1px 6px;
+        border: 1px solid #eed9bc;
+        border-radius: 999px;
+        background: #fbf4ea;
+        color: #8f4f10;
+        font-size: 10px;
+        font-weight: 550;
+        line-height: 1.4;
+        white-space: nowrap;
+      }
+      .featured-pill::before {
+        content: "";
+        flex: none;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: #d9822b;
+      }
+      .spotlight-card {
+        width: min(100%, 468px);
+        margin: 12px auto 0;
+        padding: 8px 12px;
+        border: 1px solid #e8e5dc;
+        border-radius: 12px;
+        background: linear-gradient(180deg, #fcfcfa 0%, #f7f5ef 100%);
+        text-align: left;
+      }
+      .spotlight-card[data-recommended="true"] {
+        border-color: #e6d2b5;
+        background: linear-gradient(180deg, #fffdf9 0%, #fbf6ee 100%);
+      }
+      .spotlight-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .spotlight-title {
+        display: inline-flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-width: 0;
+      }
+      .spotlight-title strong {
+        color: var(--ink);
+        font-size: 12.5px;
+        font-weight: 600;
+        letter-spacing: -0.008em;
+      }
+      .spotlight-specs {
+        margin: 3px 0 0;
+        color: #52524b;
+        font-size: 11.5px;
+        line-height: 1.4;
+      }
+      .spotlight-note {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.4;
+      }
+      .spotlight-link {
+        flex: none;
+        padding: 2px 6px;
+        border: 0;
+        border-radius: 6px;
+        background: none;
+        color: #52524b;
+        font-size: 11.5px;
+        font-weight: 500;
+        white-space: nowrap;
+        text-decoration: underline;
+        text-decoration-color: #d4d4cd;
+        text-underline-offset: 3px;
+        transition:
+          background-color 140ms ease,
+          color 140ms ease,
+          text-decoration-color 140ms ease;
+      }
+      .spotlight-link:hover:not(:disabled) {
+        background: rgba(20, 20, 16, 0.05);
+        color: var(--ink);
+        text-decoration-color: var(--ink);
       }
       .plan-why {
         max-width: 440px;
@@ -642,8 +751,9 @@
       }
       .fold {
         display: grid;
+        grid-template-columns: minmax(0, 1fr);
         grid-template-rows: 0fr;
-        width: min(100%, 440px);
+        width: min(100%, 448px);
         margin: 0 auto;
         opacity: 0;
         transition:
@@ -653,13 +763,14 @@
       }
       .fold[data-open="true"] {
         grid-template-rows: 1fr;
-        margin: 16px auto 0;
+        margin: 8px auto 0;
         opacity: 1;
       }
       .fold > div {
+        min-width: 0;
         min-height: 0;
         overflow: hidden;
-        padding: 0 4px 10px;
+        padding: 0 4px 4px;
       }
       .fold[data-open="true"] > div {
         overflow: visible;
@@ -1075,13 +1186,13 @@
         text-align: left;
       }
       .choices {
-        padding: 4px 18px;
+        padding: 2px 16px;
       }
       .choice {
         display: flex;
         align-items: center;
-        gap: 16px;
-        padding: 8px 0;
+        gap: 14px;
+        padding: 5px 0;
       }
       .choice + .choice {
         border-top: 1px solid #f1f1ee;
@@ -1165,7 +1276,7 @@
       /* The local model: one card naming it and what it needs. */
       .choice.local {
         flex-wrap: wrap;
-        row-gap: 8px;
+        row-gap: 6px;
       }
       .pick {
         width: 100%;
@@ -1174,7 +1285,7 @@
         align-items: flex-start;
         gap: 1px;
         min-width: 0;
-        padding: 7px 10px;
+        padding: 6px 10px;
         border: 1px solid #e6e6e1;
         border-radius: 9px;
         background: #fff;
@@ -1191,7 +1302,14 @@
         background: #fafaf8;
         box-shadow: inset 0 0 0 0.5px var(--ink);
       }
-      .pick span {
+      .pick-head {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        width: 100%;
+      }
+      .pick-name {
         color: var(--ink);
         font-size: 12px;
         font-weight: 550;
@@ -1200,6 +1318,28 @@
         color: var(--muted);
         font-size: 11px;
         white-space: nowrap;
+      }
+      .local-spotlight {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 5px 9px;
+        border: 1px solid #eceae2;
+        border-radius: 8px;
+        background: #faf9f5;
+        color: #52524b;
+        font-size: 11px;
+        line-height: 1.35;
+      }
+      .local-spotlight[data-recommended="true"] {
+        border-color: #e6d2b5;
+        background: #fbf6ee;
+      }
+      .local-spotlight span {
+        flex: 1;
+        min-width: 0;
       }
       /* Opens the system folder picker. */
       .change {
@@ -1268,11 +1408,8 @@
         font-size: 11.5px;
       }
       .team {
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 20px;
-        margin: 0;
+        margin: auto 0 0;
+        padding-top: 10px;
         color: var(--faint);
         font-size: 12px;
       }
@@ -1505,6 +1642,7 @@
       .signin-modal .waiting {
         display: flex;
         align-items: center;
+        margin-bottom: 4px;
         color: var(--ink);
       }
       .signin-modal .device-code strong {
@@ -1521,6 +1659,61 @@
       .signin-modal .problem {
         width: auto;
         margin: 0 0 14px;
+      }
+      .signin-modal .hint {
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+      /* No browser opened: the link below is the way on. */
+      .signin-modal .no-browser {
+        padding: 8px 10px;
+        border: 1px solid #f1e3c4;
+        border-radius: 10px;
+        background: #fdf9ef;
+        color: #6b5413;
+      }
+      .signin-modal .device-code {
+        margin-bottom: 12px;
+      }
+      .signin-modal .device-code p {
+        margin: 0;
+      }
+      .signin-modal .copy-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 4px 0;
+      }
+      .signin-modal .copy-row strong {
+        flex: 1;
+      }
+      .signin-modal .signin-link {
+        margin-bottom: 12px;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--field);
+      }
+      .signin-modal .signin-link .label {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .signin-modal .signin-link code {
+        display: block;
+        overflow: hidden;
+        margin-bottom: 8px;
+        color: var(--ink);
+        font: 11.5px var(--mono);
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        user-select: all;
+        -webkit-user-select: all;
+      }
+      .signin-modal .signin-link .buttons {
+        display: flex;
+        gap: 8px;
       }
       .signin-modal .actions {
         display: flex;
@@ -1881,9 +2074,25 @@
                   data-t-aria-label="localModelToggle"
                   hidden
                 >
-                  <span id="local-model-name"></span
+                  <span class="pick-head"
+                    ><span class="pick-name" id="local-model-name"></span
+                    ><span
+                      class="featured-pill"
+                      id="local-model-featured"
+                      hidden
+                      data-t="featuredPartnerBadge"
+                    ></span></span
                   ><small id="local-model-needs"></small>
                 </button>
+                <div class="local-spotlight" id="local-spotlight">
+                  <span id="local-spotlight-text"></span>
+                  <button
+                    type="button"
+                    class="spotlight-link"
+                    id="local-spotlight-link"
+                    data-t-title="openAnnouncement"
+                  ></button>
+                </div>
               </div>
               <div class="choice" id="subscription-row" hidden>
                 <div class="text">
@@ -1996,7 +2205,14 @@
             data-t="getStarted"
           ></button>
           <p class="plan-line" id="plan-line">
-            <span id="plan-summary"></span><span class="sep"></span
+            <span id="plan-summary"></span
+            ><span
+              class="featured-pill"
+              id="plan-featured-badge"
+              hidden
+              data-t="featuredPartnerBadge"
+            ></span
+            ><span class="sep"></span
             ><button
               class="link quiet"
               id="local-customize"
@@ -2015,6 +2231,27 @@
             data-t="checkAgain"
           ></button>
         </div>
+        <aside
+          class="spotlight-card"
+          id="featured-spotlight"
+          data-t-aria-label="featuredModelAriaLabel"
+          hidden
+        >
+          <div class="spotlight-head">
+            <span class="spotlight-title"
+              ><strong data-t="featuredModelName"></strong
+              ><span class="featured-pill" data-t="featuredPartnerBadge"></span
+            ></span>
+            <button
+              type="button"
+              class="spotlight-link"
+              id="featured-spotlight-link"
+              data-t-title="openAnnouncement"
+            ></button>
+          </div>
+          <p class="spotlight-specs" data-t="featuredModelSpecs"></p>
+          <p class="spotlight-note" id="featured-spotlight-note"></p>
+        </aside>
         <p class="error" id="local-error" role="alert"></p>
         <p class="team" id="team">
           <span data-t="teamServer"></span>
@@ -2059,13 +2296,45 @@
           <div class="sheet">
             <h2 id="runtime-signin-title"></h2>
             <p id="runtime-signin-lead"></p>
-            <p class="waiting" id="runtime-signin-waiting" role="status">
-              <span class="spinner"></span><span data-t="signInWaiting"></span>
+            <div id="runtime-signin-waiting" role="status">
+              <p class="waiting">
+                <span class="spinner"></span
+                ><span data-t="signInWaiting"></span>
+              </p>
+              <p class="hint" data-t="signInContinues"></p>
+            </div>
+            <p class="no-browser" id="runtime-signin-no-browser" role="alert">
+              <span id="runtime-signin-no-browser-text"></span>
             </p>
-            <p class="device-code" id="runtime-signin-device" hidden>
-              <span data-t="deviceCode"></span>
-              <strong id="runtime-signin-device-code"></strong>
-            </p>
+            <div class="device-code" id="runtime-signin-device" hidden>
+              <p data-t="deviceCode"></p>
+              <div class="copy-row">
+                <strong id="runtime-signin-device-code"></strong>
+                <button
+                  class="secondary"
+                  id="runtime-signin-copy-code"
+                  type="button"
+                ></button>
+              </div>
+              <p class="hint" data-t="deviceCodeSetting"></p>
+            </div>
+            <div class="signin-link" id="runtime-signin-link" hidden>
+              <span class="label" data-t="signInLink"></span>
+              <code id="runtime-signin-url"></code>
+              <div class="buttons">
+                <button
+                  class="secondary"
+                  id="runtime-signin-open"
+                  type="button"
+                  data-t="openInBrowser"
+                ></button>
+                <button
+                  class="secondary"
+                  id="runtime-signin-copy-url"
+                  type="button"
+                ></button>
+              </div>
+            </div>
             <p class="problem" id="runtime-signin-error" role="alert"></p>
             <div class="actions" id="runtime-signin-idle">
               <button
@@ -2073,6 +2342,12 @@
                 id="runtime-signin-start"
                 type="button"
                 data-t="authorize"
+              ></button>
+              <button
+                class="link quiet"
+                id="runtime-signin-device-start"
+                type="button"
+                data-t="useDeviceCode"
               ></button>
               <div class="row">
                 <button
@@ -2118,9 +2393,8 @@
             <div class="row" id="runtime-signin-busy">
               <button
                 class="link quiet"
-                id="runtime-signin-open"
+                id="runtime-signin-switch-method"
                 type="button"
-                data-t="openBrowserAgain"
               ></button>
               <button
                 class="ghost"
@@ -2131,7 +2405,7 @@
             </div>
             <details id="runtime-signin-trouble">
               <summary class="link quiet" data-t="havingTrouble"></summary>
-              <p id="runtime-signin-help"></p>
+              <p data-t="signInHelpCode"></p>
               <form id="runtime-signin-paste">
                 <input
                   id="runtime-signin-input"
@@ -3413,11 +3687,24 @@
         claude: "signInLeadClaude",
         pi: "signInLeadPi",
       };
+      // The page's own words for why a sign-in ended; the installer's
+      // message is the fallback for anything else.
+      const SIGN_IN_REASONS = {
+        timed_out: "signInTimedOut",
+        ended: "signInEnded",
+        unavailable: "signInUnavailable",
+      };
       let otherRuntimes = false;
+      // The sign-in's own errors, such as a failed copy; render keeps them.
+      let signInError = "";
+      // What was just copied: "url" or "code".
+      let signInCopied;
       // The runtime installed but not signed in: a dialog starts its own
-      // login, which opens the browser, and closes once it is signed in.
-      // The link and code it prints are only a fallback, folded away. No
-      // secret shows here; a pasted code goes straight to the runtime.
+      // login, which opens the browser, and closes once it is signed in,
+      // bringing setup back. The link (and Codex's device code) always show
+      // with buttons to open and copy them, so signing in works even when
+      // no browser opens. No secret shows here; a pasted code goes straight
+      // to the runtime.
       const renderSignIn = (local, busy) => {
         const sign = local.signIn;
         const open =
@@ -3429,6 +3716,7 @@
         if (!open) {
           otherRuntimes = false;
           signInByokOpen = false;
+          signInError = "";
           $("runtime-signin-trouble").open = false;
           return;
         }
@@ -3437,22 +3725,42 @@
         const running =
           sign.state === "starting" || sign.state === "waiting_user";
         const pi = sign.runtime === "pi";
+        const codex = sign.runtime === "codex";
+        const link = running && sign.url;
         $("runtime-signin-title").textContent = t("signInTo", {
           runtime: name,
         });
         $("runtime-signin-lead").textContent = t(SIGN_IN_LEADS[sign.runtime]);
         $("runtime-signin-lead").hidden = running;
         $("runtime-signin-waiting").hidden = !running;
-        $("runtime-signin-device").hidden = !sign.deviceCode;
+        $("runtime-signin-no-browser").hidden = !link || !sign.browserFailed;
+        // A device code works in any browser; the browser login calls back
+        // to this computer, so its link has to open here.
+        $("runtime-signin-no-browser-text").textContent = t(
+          sign.deviceCode ? "browserFailedDevice" : "browserFailed",
+        );
+        $("runtime-signin-device").hidden = !link || !sign.deviceCode;
         $("runtime-signin-device-code").textContent = sign.deviceCode || "";
+        $("runtime-signin-copy-code").textContent = t(
+          signInCopied === "code" ? "copied" : "copyCode",
+        );
+        $("runtime-signin-link").hidden = !link;
+        $("runtime-signin-url").textContent = sign.url || "";
+        $("runtime-signin-url").title = sign.url || "";
+        $("runtime-signin-copy-url").textContent = t(
+          signInCopied === "url" ? "copied" : "copyLink",
+        );
         $("runtime-signin-error").textContent = failed
-          ? sign.message || t("signInFailed")
-          : "";
+          ? SIGN_IN_REASONS[sign.reason]
+            ? t(SIGN_IN_REASONS[sign.reason])
+            : sign.message || t("signInFailed")
+          : signInError;
         $("runtime-signin-idle").hidden = running;
         $("runtime-signin-start").hidden = pi;
         $("runtime-signin-start").textContent = t(
           failed ? "retry" : "authorize",
         );
+        $("runtime-signin-device-start").hidden = !codex;
         $("runtime-signin-logs").hidden = !failed;
         $("runtime-signin-runtimes").hidden = !otherRuntimes && !pi;
         $("runtime-signin-other").hidden = pi;
@@ -3465,14 +3773,14 @@
           option.disabled = busy;
         }
         $("runtime-signin-busy").hidden = !running;
-        $("runtime-signin-open").hidden = !sign.url;
-        // The fallback: the printed link, and for Claude Code the code its
-        // page shows.
-        $("runtime-signin-trouble").hidden = !sign.url || !!sign.deviceCode;
-        $("runtime-signin-help").textContent = t(
-          sign.acceptsCode ? "signInHelpCode" : "signInHelp",
+        // Codex: a code for another device, or back to this computer's
+        // browser.
+        $("runtime-signin-switch-method").hidden = !codex;
+        $("runtime-signin-switch-method").textContent = t(
+          sign.deviceCode ? "useBrowserHere" : "useDeviceCode",
         );
-        $("runtime-signin-paste").hidden = !sign.acceptsCode;
+        // Claude Code's page shows a code to paste back.
+        $("runtime-signin-trouble").hidden = !link || !sign.acceptsCode;
         requestAnimationFrame(placeKnobs);
       };
 
@@ -3509,6 +3817,10 @@
           // GPU memory free instead.
           case "gpu-ownership-unknown":
             return t("reasonGpuOwnership");
+          case "gateway-port-in-use":
+            return t("reasonGatewayPortInUse");
+          case "harness-unavailable":
+            return t("reasonHarnessUnavailable");
           case "facts-unavailable":
             return t("reasonFacts");
           case "cuda-driver-update-required": {
@@ -3536,7 +3848,11 @@
           case "plan-unavailable":
             return t(held ? "reasonPlanHeld" : "reasonPlanUnavailable");
           default:
-            return t(held ? "reasonHeld" : "reasonUnavailable");
+            return held
+              ? freeMemory
+                ? t("reasonHeld")
+                : t("reasonHeldGeneric")
+              : t("reasonUnavailable");
         }
       };
       const reasonsText = (models, held) =>
@@ -3550,9 +3866,43 @@
       const RECHECKABLE_REASONS = new Set([
         "cuda-driver-update-required",
         "cuda-driver-version-unknown",
+        "gateway-port-in-use",
+        "harness-unavailable",
       ]);
-      // The held card's short line: what is free against what is needed.
+      const CUDA_DRIVER_CODES = new Set([
+        "cuda-driver-update-required",
+        "cuda-driver-version-unknown",
+      ]);
+      const MEMORY_HELD_CODES = new Set([
+        "gpu-memory-required",
+        "free-memory-required",
+        "gpu-sharing-required",
+        "plan-unavailable",
+      ]);
+      const cudaDriverHeld = (models) =>
+        Boolean(
+          models.reasons?.some((reason) => CUDA_DRIVER_CODES.has(reason.code)),
+        );
+      const memoryHeld = (models) =>
+        models.freeMemory != null ||
+        Boolean(
+          models.reasons?.some((reason) => MEMORY_HELD_CODES.has(reason.code)),
+        );
+      // The held card's short line: what blocks local models right now.
       const heldLine = (models) => {
+        if (
+          models.reasons?.some(
+            (reason) => reason.code === "gateway-port-in-use",
+          )
+        )
+          return t("heldGatewayPort");
+        if (
+          models.reasons?.some(
+            (reason) => reason.code === "harness-unavailable",
+          )
+        )
+          return t("heldHarnessUnavailable");
+        if (cudaDriverHeld(models)) return t("heldCudaDriver");
         const gpu = models.reasons?.find(
           (reason) =>
             reason.code === "gpu-memory-required" &&
@@ -3578,9 +3928,9 @@
         const free = ram?.freeBytes ?? models.freeMemory?.ramAvailableBytes;
         const needed =
           ram?.requiredBytes ?? models.freeMemory?.ramRequiredBytes;
-        return free != null && needed != null
-          ? t("heldMemory", { free: size(free), needed: size(needed) })
-          : t("heldClose");
+        if (free != null && needed != null)
+          return t("heldMemory", { free: size(free), needed: size(needed) });
+        return memoryHeld(models) ? t("heldClose") : t("heldResolve");
       };
 
       const renderLocal = (busy) => {
@@ -3598,10 +3948,12 @@
         const models = local.localModels;
         const model =
           models.state === "checked" && models.eligible && models.model;
-        // The model fits the hardware, but other programs hold the memory it
-        // needs now: shown, not offered, until a new check finds that memory.
-        const held =
-          models.state === "checked" && models.blockedNow && models.model;
+        // The computer is temporarily blocked from running a local model now
+        // (for example memory in use, outdated NVIDIA driver, gateway port in
+        // use, or harness unavailable): shown on hold until a new check clears
+        // it.
+        const held = models.state === "checked" && !!models.blockedNow;
+        const heldModel = held && models.model;
         plan.localModel = plan.source === "local" && !!model;
         const custom = !isDefaultPlan(local);
         // Quick Install waits for the check, so it installs what it shows.
@@ -3679,10 +4031,20 @@
                   .filter(Boolean)
                   .join(" · ")
               : held
-                ? t("heldWhy", {
-                    reasons: reasonsText(models, true),
-                    plan: named(plan),
-                  })
+                ? cudaDriverHeld(models)
+                  ? t("heldWhyCudaDriver", {
+                      reasons: reasonsText(models, true),
+                      plan: named(plan),
+                    })
+                  : memoryHeld(models)
+                    ? t("heldWhy", {
+                        reasons: reasonsText(models, true),
+                        plan: named(plan),
+                      })
+                    : t("heldWhyGeneric", {
+                        reasons: reasonsText(models, true),
+                        plan: named(plan),
+                      })
                 : (models.state === "checked" && !models.eligible) ||
                     models.state === "unavailable"
                   ? unavailableText
@@ -3710,7 +4072,36 @@
           remove.textContent = t(removing ? "keep" : "remove");
         }
         $("keys-note").textContent = t("keysNote");
-        const shown = model || held;
+        const shown = model || heldModel;
+        const inklingRecommended = Boolean(
+          recommended.localModel && model?.featuredInkling,
+        );
+        const shownIsInkling = Boolean(shown?.featuredInkling);
+        $("plan-featured-badge").hidden =
+          !local.available ||
+          customizing ||
+          checking ||
+          !following ||
+          !inklingRecommended;
+        $("featured-spotlight").hidden = !local.available || customizing;
+        $("featured-spotlight").dataset.recommended =
+          String(inklingRecommended);
+        $("featured-spotlight-note").textContent = t(
+          inklingRecommended
+            ? "featuredModelSelected"
+            : "featuredModelLibraryNote",
+        );
+        $("featured-spotlight-link").textContent = t(
+          inklingRecommended ? "learnMoreLink" : "thinkingMachinesLink",
+        );
+        $("local-model-featured").hidden = !shownIsInkling;
+        $("local-spotlight").dataset.recommended = String(shownIsInkling);
+        $("local-spotlight-text").textContent = t(
+          shownIsInkling ? "featuredModelSpecs" : "featuredModelCustomizeNote",
+        );
+        $("local-spotlight-link").textContent = t(
+          shownIsInkling ? "learnMoreLink" : "thinkingMachinesLink",
+        );
         $("source-sub").textContent =
           recommended.source === "local"
             ? t("recommendedLocal")
@@ -3760,6 +4151,12 @@
             .join(" · ");
           $("local-model").setAttribute("aria-checked", String(!!model));
           $("local-model").disabled = busy || !model;
+        } else if (held) {
+          $("local-sub").textContent = heldLine(models);
+          $("local-model-name").textContent = t("localOnHold");
+          $("local-model-needs").textContent = reasonsText(models, true);
+          $("local-model").setAttribute("aria-checked", "false");
+          $("local-model").disabled = true;
         } else if (settled) {
           $("local-sub").textContent = t("localRuns");
           $("local-model-name").textContent = t("localNotAvailable");
@@ -4110,13 +4507,17 @@
       const run = async (command, errorId) => {
         if (pending !== null) return;
         pending = command.op;
-        if (errorId) $(errorId).textContent = "";
+        // The sign-in dialog renders its error itself.
+        if (errorId === "runtime-signin-error") signInError = "";
+        else if (errorId) $(errorId).textContent = "";
         render();
         try {
           state = await setup.run(command);
           return true;
         } catch (error) {
-          if (errorId) $(errorId).textContent = ipcMessage(error);
+          if (errorId === "runtime-signin-error")
+            signInError = ipcMessage(error);
+          else if (errorId) $(errorId).textContent = ipcMessage(error);
           return false;
         } finally {
           pending = null;
@@ -4177,8 +4578,48 @@
         // That page shows a code to paste back here.
         if (state.localServer.signIn?.acceptsCode)
           $("runtime-signin-trouble").open = true;
-        run({ op: "local.signin.open" }, "runtime-signin-error");
+        // On Linux opening waits up to seconds for xdg-open, so it skips run()
+        // and leaves the dialog usable; a browser that fails to open comes
+        // back through onState as browserFailed.
+        signInError = "";
+        setup.run({ op: "local.signin.open" }).catch((error) => {
+          signInError = ipcMessage(error);
+          render();
+        });
       });
+      const copySignIn = async (what) => {
+        if (
+          !(await run(
+            { op: "local.signin.copy", what },
+            "runtime-signin-error",
+          ))
+        )
+          return;
+        signInCopied = what;
+        render();
+        setTimeout(() => {
+          if (signInCopied !== what) return;
+          signInCopied = undefined;
+          render();
+        }, 1500);
+      };
+      $("runtime-signin-copy-url").addEventListener("click", () =>
+        copySignIn("url"),
+      );
+      $("runtime-signin-copy-code").addEventListener("click", () =>
+        copySignIn("code"),
+      );
+      $("runtime-signin-device-start").addEventListener("click", () =>
+        run({ op: "local.signin.start", device: true }, "runtime-signin-error"),
+      );
+      $("runtime-signin-switch-method").addEventListener("click", () =>
+        run(
+          state.localServer.signIn?.deviceCode
+            ? { op: "local.signin.start" }
+            : { op: "local.signin.start", device: true },
+          "runtime-signin-error",
+        ),
+      );
       $("runtime-signin-cancel").addEventListener("click", () =>
         run({ op: "local.signin.cancel" }, "runtime-signin-error"),
       );
@@ -4344,6 +4785,22 @@
       );
       $("local-recheck").addEventListener("click", () =>
         run({ op: "local.recheck" }, "local-error"),
+      );
+      const openFeaturedAnnouncement = () =>
+        run(
+          {
+            op: "external.open",
+            url: window.lingerSetup.featuredAnnouncementUrl,
+          },
+          "local-error",
+        );
+      $("featured-spotlight-link").addEventListener(
+        "click",
+        openFeaturedAnnouncement,
+      );
+      $("local-spotlight-link").addEventListener(
+        "click",
+        openFeaturedAnnouncement,
       );
       $("local-model").addEventListener("click", () => {
         if ($("local-model").disabled) return;

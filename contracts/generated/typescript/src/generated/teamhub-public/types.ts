@@ -1573,7 +1573,7 @@ export interface paths {
     get?: never;
     /**
      * Save the deployment's API key for one voice provider.
-     * @description For deployments without the provider's environment key. TeamHub checks the key with the provider, then stores it encrypted with TEAMHUB_SECRET_ENCRYPTION_KEY. Any signed-in Human may save it; the key is never returned. 400 carries INVALID_REQUEST or VOICE_KEY_REJECTED, 409 VOICE_KEY_FROM_ENVIRONMENT, and 503 VOICE_KEY_STORAGE_UNAVAILABLE, VOICE_PROVIDER_UNAVAILABLE or VOICE_MEDIA_OFF.
+     * @description For deployments without the provider's environment key. TeamHub checks the key with the provider, then stores it encrypted with TEAMHUB_SECRET_ENCRYPTION_KEY. A Soniox key is also probed on the realtime stream (start request, no audio, a few seconds at most), which refuses a key without balance or realtime permission. Any signed-in Human may save it; the key is never returned. error.code is one of VoiceProviderKeyErrorCode.
      */
     put: operations["saveVoiceProviderKey"];
     post?: never;
@@ -4712,11 +4712,37 @@ export interface components {
       code:
         | "MEMORY_INSUFFICIENT"
         | "DISK_INSUFFICIENT"
-        | "PLATFORM_UNSUPPORTED";
+        | "PLATFORM_UNSUPPORTED"
+        | "GPU_UNSUPPORTED"
+        | "DRIVER_UPDATE_REQUIRED"
+        | "RUNTIME_DEPENDENCY_MISSING"
+        | "UNAVAILABLE";
       /** Format: int64 */
       need_bytes?: number;
       /** Format: int64 */
       have_bytes?: number;
+      /**
+       * @description With MEMORY_INSUFFICIENT: which memory space was short.
+       * @enum {string}
+       */
+      memory_kind?: "vram" | "ram" | "unified";
+      /**
+       * @description With GPU_UNSUPPORTED: detected GPU vendor class on this Computer.
+       * @enum {string}
+       */
+      gpu_vendor?: "amd" | "intel" | "none" | "unknown";
+      /** @description With DRIVER_UPDATE_REQUIRED: minimum CUDA version required by the pinned engine. */
+      required_cuda?: string;
+      /** @description With DRIVER_UPDATE_REQUIRED: CUDA version reported by the installed driver. */
+      detected_cuda?: string;
+      /** @description With DRIVER_UPDATE_REQUIRED: installed NVIDIA driver version. */
+      driver_version?: string;
+      /** @description With RUNTIME_DEPENDENCY_MISSING: missing shared libraries such as libgomp.so.1. */
+      missing_libraries?: string[];
+      /** @description With RUNTIME_DEPENDENCY_MISSING: minimum glibc version required by the engine. */
+      required_glibc?: string;
+      /** @description With RUNTIME_DEPENDENCY_MISSING: glibc version detected on this Computer. */
+      detected_glibc?: string;
     };
     LocalModelAvailability: {
       downloadable: boolean;
@@ -4748,7 +4774,7 @@ export interface components {
       base_url: string;
     };
     /**
-     * @description Closed localmodels library error set. It is extended only together with the localmodels library contract.
+     * @description Closed localmodels library error set. It is extended only together with the localmodels library contract; UNKNOWN_ERROR preserves forward compatibility with newer localmodels releases.
      * @enum {string}
      */
     LocalModelErrorCode:
@@ -4758,6 +4784,9 @@ export interface components {
       | "MEMORY_INSUFFICIENT"
       | "DISK_INSUFFICIENT"
       | "PLATFORM_UNSUPPORTED"
+      | "GPU_UNSUPPORTED"
+      | "DRIVER_UPDATE_REQUIRED"
+      | "RUNTIME_DEPENDENCY_MISSING"
       | "LOAD_NO_ROOM"
       | "DOWNLOAD_FAILED"
       | "CHECKSUM_MISMATCH"
@@ -4767,7 +4796,8 @@ export interface components {
       | "OUT_OF_MEMORY"
       | "MODEL_FILES_MISSING"
       | "GATEWAY_REGISTRATION_FAILED"
-      | "CANCELLED";
+      | "CANCELLED"
+      | "UNKNOWN_ERROR";
     LocalModelError: {
       code: components["schemas"]["LocalModelErrorCode"];
       /** @description Diagnostic text for display; never matched on. */
@@ -4878,6 +4908,15 @@ export interface components {
       /** @description Active Agents placed on this Computer with runtime pi whose runtime model is this model's gateway model. */
       used_by: components["schemas"]["LocalModelUser"][];
     };
+    /** @description Present only when localmodels debug mode (tiny or simulate) is active on the Computer. config_path is shown only to the Computer owner. */
+    LocalModelsDebugInfo: {
+      /** @enum {string} */
+      mode: "tiny" | "simulate";
+      /** @enum {string} */
+      source: "env" | "state_config" | "user_config";
+      /** @description Local debug.json path when source is state_config or user_config; owner-only in the public view. */
+      config_path?: string;
+    };
     /** @description One Computer's model library as last reported. Only the Computer owner can act (viewer_is_owner); other Tenant members who can see the Computer read it. */
     LocalModelsView: {
       computer: components["schemas"]["LocalModelsComputer"];
@@ -4890,6 +4929,8 @@ export interface components {
       tool_version?: string;
       pools: components["schemas"]["LocalModelPool"][];
       models: components["schemas"]["LocalModelView"][];
+      /** @description Present only when localmodels debug mode is active on the Computer; config_path is omitted for non-owners. */
+      debug?: components["schemas"]["LocalModelsDebugInfo"];
     };
     LocalModelsRefreshAccepted: {
       computer_id: components["schemas"]["Id"];
@@ -4911,6 +4952,9 @@ export interface components {
       | "LOCAL_MODEL_MEMORY_INSUFFICIENT"
       | "LOCAL_MODEL_DISK_INSUFFICIENT"
       | "LOCAL_MODEL_PLATFORM_UNSUPPORTED"
+      | "LOCAL_MODEL_GPU_UNSUPPORTED"
+      | "LOCAL_MODEL_DRIVER_UPDATE_REQUIRED"
+      | "LOCAL_MODEL_RUNTIME_DEPENDENCY_MISSING"
       | "LOCAL_MODEL_ACTION_FAILED"
       | "LOCAL_MODEL_ACTION_UNCONFIRMED"
       | "LOCAL_MODELS_SERVICE_UNAVAILABLE";
@@ -4988,7 +5032,7 @@ export interface components {
       terminated_run_count?: number;
     };
     /**
-     * @description error.code of a refused model-source request (403, 409, 502, 503, 504); 400, 401, and 404 use the common codes. LOCAL_COMPUTER_OFFLINE: the Computer is not connected. MODEL_SOURCE_FORBIDDEN: the viewer is not the Computer owner. MODEL_SOURCE_UNAVAILABLE: the Computer has no localmodels tool or cannot switch model sources. AGENT_HAS_ACTIVE_RUNS: Agents on the Computer have running work and force_terminate was false; details carries one entry per such Agent, with field "agent" and the Agent's display name as reason. RUNTIME_NOT_ENABLED, LOCAL_MODEL_NO_ROOM, LOCAL_MODEL_UNKNOWN, and the BYOK_ codes are the Computer's refusals (409); for BYOK_AUTH_FAILED, BYOK_NOT_FOUND, BYOK_UNREACHABLE and BYOK_UPSTREAM_REJECTED, message is the Computer's own and names the address it sent to and the endpoint's HTTP status. MODEL_SOURCE_FAILED: the Computer failed with an error that has no code of its own here (502). MODEL_SOURCE_SERVICE_UNAVAILABLE: Agent Service could not be reached (503). MODEL_SOURCE_UNCONFIRMED: the Computer had not answered by the deadline; it may still switch (504).
+     * @description error.code of a refused model-source request (403, 409, 502, 503, 504); 400, 401, and 404 use the common codes. LOCAL_COMPUTER_OFFLINE: the Computer is not connected. MODEL_SOURCE_FORBIDDEN: the viewer is not the Computer owner. MODEL_SOURCE_UNAVAILABLE: the Computer has no localmodels tool or cannot switch model sources. AGENT_HAS_ACTIVE_RUNS: Agents on the Computer have running work and force_terminate was false; details carries one entry per such Agent, with field "agent" and the Agent's display name as reason. RUNTIME_NOT_ENABLED, LOCAL_MODEL_NO_ROOM, LOCAL_MODEL_UNKNOWN, and the BYOK endpoint refusals (BYOK_INVALID_CONFIG, BYOK_AUTH_FAILED, BYOK_NOT_FOUND, BYOK_UNREACHABLE, BYOK_UPSTREAM_REJECTED) are the Computer's refusals (409); for BYOK_AUTH_FAILED, BYOK_NOT_FOUND, BYOK_UNREACHABLE and BYOK_UPSTREAM_REJECTED, message is the Computer's own and names the address it sent to and the endpoint's HTTP status. BYOK_GATEWAY_FAILED: the Computer could not start, stop, or configure its local BYOK gateway (502); when the Computer reported a diagnostic message, message carries it and details carries one entry with field "gateway" and that diagnostic as reason. MODEL_SOURCE_FAILED: the Computer failed with an error that has no code of its own here (502). MODEL_SOURCE_SERVICE_UNAVAILABLE: Agent Service could not be reached (503). MODEL_SOURCE_UNCONFIRMED: the Computer had not answered by the deadline; it may still switch (504).
      * @enum {string}
      */
     ModelSourceErrorCode:
@@ -5004,6 +5048,7 @@ export interface components {
       | "BYOK_NOT_FOUND"
       | "BYOK_UNREACHABLE"
       | "BYOK_UPSTREAM_REJECTED"
+      | "BYOK_GATEWAY_FAILED"
       | "MODEL_SOURCE_FAILED"
       | "MODEL_SOURCE_SERVICE_UNAVAILABLE"
       | "MODEL_SOURCE_UNCONFIRMED";
@@ -6745,6 +6790,32 @@ export interface components {
     SaveVoiceProviderKeyRequest: {
       api_key: string;
     };
+    /**
+     * @description error.code of a refused voice provider key save. 400: INVALID_REQUEST (malformed request or key); VOICE_KEY_REJECTED (the provider refused the key); VOICE_KEY_NO_BALANCE (the provider account's balance or monthly budget is used up); VOICE_KEY_NO_REALTIME_PERMISSION (the Soniox key may not use realtime transcription). 409: VOICE_KEY_FROM_ENVIRONMENT. 503: VOICE_KEY_STORAGE_UNAVAILABLE, VOICE_MEDIA_OFF, or VOICE_PROVIDER_UNAVAILABLE (the provider could not be reached or did not answer in time).
+     * @enum {string}
+     */
+    VoiceProviderKeyErrorCode:
+      | "INVALID_REQUEST"
+      | "VOICE_KEY_REJECTED"
+      | "VOICE_KEY_NO_BALANCE"
+      | "VOICE_KEY_NO_REALTIME_PERMISSION"
+      | "VOICE_KEY_FROM_ENVIRONMENT"
+      | "VOICE_KEY_STORAGE_UNAVAILABLE"
+      | "VOICE_MEDIA_OFF"
+      | "VOICE_PROVIDER_UNAVAILABLE";
+    /** @description The common error body with error.code narrowed to VoiceProviderKeyErrorCode. */
+    VoiceProviderKeyError: {
+      code: components["schemas"]["VoiceProviderKeyErrorCode"];
+      /** @description Human-readable summary safe to display; clients branch on code, not message. */
+      message: string;
+      request_id: string;
+      details?: components["schemas"]["ErrorDetail"][];
+      /** @default false */
+      retryable: boolean;
+    };
+    VoiceProviderKeyErrorResponse: {
+      error: components["schemas"]["VoiceProviderKeyError"];
+    };
     VoiceConnectionCredential: {
       /** Format: uri */
       endpoint: string;
@@ -6826,6 +6897,16 @@ export interface components {
       transcript_recovery_progress_ms?: number;
       /** Format: int64 */
       transcript_recovery_total_ms?: number;
+      /**
+       * Format: int64
+       * @description The recovery attempt that is running or due next; once recovery failed, the attempts already made. Present with transcript_recovery_status.
+       */
+      transcript_recovery_attempt?: number;
+      /**
+       * Format: int64
+       * @description Attempts a recovery makes before it fails and waits for the account's retry.
+       */
+      transcript_recovery_max_attempts?: number;
       audio_document_version_id?: components["schemas"]["Id"];
       transcript_document_version_id?: components["schemas"]["Id"];
       id: components["schemas"]["Id"];
@@ -8581,6 +8662,15 @@ export interface components {
       };
       content: {
         "application/json": components["schemas"]["ErrorResponse"];
+      };
+    };
+    /** @description TeamHub or the voice provider refused the key; error.code is one of VoiceProviderKeyErrorCode. */
+    VoiceProviderKeyRefused: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        "application/json": components["schemas"]["VoiceProviderKeyErrorResponse"];
       };
     };
     /** @description Rejected or retryable file operation. Native latest changed throughout bounded rendering retries returns 202 with latest_not_ready, private/no-store and no document bytes. Retry after one second. Other conflicts include current and base version IDs. Service failures and exhausted serialization retries remain unavailable. */
@@ -11282,10 +11372,10 @@ export interface operations {
           "application/json": components["schemas"]["VoiceProviderKeyStatus"];
         };
       };
-      400: components["responses"]["BadRequest"];
+      400: components["responses"]["VoiceProviderKeyRefused"];
       401: components["responses"]["Unauthenticated"];
-      409: components["responses"]["Conflict"];
-      503: components["responses"]["ServiceUnavailable"];
+      409: components["responses"]["VoiceProviderKeyRefused"];
+      503: components["responses"]["VoiceProviderKeyRefused"];
     };
   };
   getVoiceSession: {

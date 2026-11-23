@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import type { components } from "@linger/wire-contracts/linger-installer/types";
+import { reasonCodeList } from "@linger/local-installation/local-models";
 import { publicComputer } from "./public.js";
 import { privateDirectory, privateRead, privateWrite } from "./storage.js";
 type Input = components["schemas"]["InstallationInput"];
@@ -417,6 +418,8 @@ export class JobManager {
           computer?: Job["computer"];
           knowledge?: string;
           code?: unknown;
+          causeCode?: unknown;
+          reasons?: unknown;
           stage?: unknown;
           localModelsPlan?: unknown;
           runtime?: unknown;
@@ -448,6 +451,13 @@ export class JobManager {
             ].includes(String(details.code)))
         ) {
           record.job.errorCode = String(details.code);
+          if (
+            typeof details.causeCode === "string" &&
+            /^[A-Z][A-Z0-9_]{0,63}$/.test(details.causeCode)
+          )
+            record.job.errorCauseCode = details.causeCode;
+          const reasons = reasonCodeList(details.reasons);
+          if (reasons.length) record.job.errorReasons = reasons;
           if (details.code === "LOCAL_MODELS_APPROVAL_REQUIRED") {
             const plan = publicLocalModelsPlan(
               details.localModelsPlan,

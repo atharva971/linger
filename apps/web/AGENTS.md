@@ -38,7 +38,10 @@ build:assets` to check the initial JS budget.
   edits while offline). BYOK addresses requests as base URL + path + endpoint
   and sends the format the address's ending names (else the Runtime's own);
   it lists models only on request and shows a Test result as a floating
-  message, with the Computer's own message for endpoint refusals. A switch
+  message, with the Computer's own message for endpoint refusals; switch
+  failures also surface the Computer's diagnostic detail for
+  `BYOK_GATEWAY_FAILED` (from the `gateway` detail entry) and BYOK endpoint
+  refusals. A switch
   refused with `AGENT_HAS_ACTIVE_RUNS` retries with `force_terminate` only
   after the owner confirms. The Local model
   tab is one Computer's model library as TeamHub last stored it. The Computer
@@ -48,7 +51,12 @@ build:assets` to check the initial JS budget.
   memory or unified memory is constrained), shows an explicit `Memory guidance`
   banner and `Recheck memory` button (`POST .../local-models`), lets owners
   pick among installed local models in `SwitchToLocalNotice` or click
-  `Use for Agents` on a loaded row, renders tinted family icon tiles, Agent
+  `Use for Agents` on a loaded row, highlights Thinking Machines' Inkling 2
+  Mini in a featured spotlight frame (`featured-model-spotlight.tsx`) wrapping
+  the matching `ModelRow` so status and actions stay in one place (matched via
+  `@linger/service-kit/featured-models`, degrading to a partner highlight with
+  external links when absent from the catalog),
+  renders tinted family icon tiles, Agent
   usage counts, structured capability/parameter badges (never matched against
   `name` or `description`), state-distinct cards (`loaded`, `recommended`,
   `failed` with short failure reasons and direct `Remove` for damaged/missing
@@ -59,8 +67,13 @@ build:assets` to check the initial JS budget.
   `local-model-agents.ts` (`Use with <Another Me>`, `Open chat`,
   `Switch Agent…` in `Used by`, and `Make room` automatic Agent handoff once
   the replacement model loads when `Pi` is ready), and maps every code and enum
-  label to English in `local-models-copy.ts`. Without `?computer=` the desktop
-  app opens its own Computer and a browser prefers an online Computer. Only the
+  label to English in `local-models-copy.ts`. Without `?computer=` the page
+  reopens the last owned Computer chosen in this browser
+  (`last-models-computer.ts`, cleared on logout), else the desktop app opens its
+  own Computer and a browser prefers an online Computer. The header
+  `ComputerPicker` (`computer-picker.tsx`) shows connection dots and orders
+  online Computers first, and once more than 10 Computers exist it adds
+  in-popover search plus `All` / `Online` / `Offline` status filtering. Only the
   Computer's owner can act; actions return at once and progress arrives as
   `local-models` invalidation hints (while `directory` hints and model-source
   switches keep `Used by` and Agent registrations synchronized). From the click
@@ -72,8 +85,12 @@ build:assets` to check the initial JS budget.
   Make room filters stale unloaded IDs out of `unload_first`, lists what else
   holds the pool (components, and other apps from `used_bytes` no holder
   accounts for) when unloading models cannot free enough, and says a model
-  cannot fit only when it needs more than the pool's total. A Computer's detail
-  on the Computers page links here and reads no model state itself.
+  cannot fit only when it needs more than the pool's total. Opening the page or
+  reconnecting an offline Computer auto-refreshes `model-source` and triggers a
+  fresh `POST .../local-models` memory snapshot for the owner, while
+  `LOCAL_COMPUTER_OFFLINE` disables BYOK edits immediately. A Computer's detail
+  on the Computers page links here, reads `model-source` for its active runtime
+  pill, and reads no local model library state itself.
 - `src/i18n`: the interface languages (English and Simplified Chinese).
   `messages.ts` re-exports the React-free core from
   `@linger/service-kit/messages`, which the desktop shell shares,
@@ -105,7 +122,11 @@ build:assets` to check the initial JS budget.
   `public/linger-wordmark.svg`, with the proportions of `assets/logo-horizontal.svg`.
 - Switching between Meeting and Voice Mode ends the previous session and
   releases its microphone before the new mode starts. Meeting saving can
-  continue in the background. If browser activation expires during the
+  continue in the background. The sidebar Meeting entry spins only while a
+  Stop or save is under way: a transcript recovery shows its attempt
+  ("Recovering 2/8"), and a Stop that failed three times or a failed recovery
+  shows a red dot and opens the window on its Retry without starting a new
+  recording. If browser activation expires during the
   switch, the new mode opens in the page and can be floated from there.
   During Live, the Meeting entry offers to start a new Meeting even while an
   earlier one is saving. Both in-page voice windows retain a visible, draggable
@@ -144,8 +165,10 @@ build:assets` to check the initial JS budget.
   window placement remains under browser control. Stop preserves the current
   recording view and window dimensions. A minimized window, in the page
   (including the desktop app) or picture-in-picture, shows the confirmation
-  actions side by side within its control row, so they stay on screen wherever
-  the row sits; an open window keeps the vertical confirmation card.
+  actions side by side within its control row in place of Pause and Stop, so
+  they stay on screen wherever the row sits and never draw over the controls;
+  the timer stays beside them while it fits. An open window keeps the vertical
+  confirmation card. Escape or Keep recording returns focus to Stop.
 - Recording and Voice Mode distinguish the native window's close action from
   back to tab through the shared PiP return detection. Back to tab keeps the
   session running in the page and exposes a Float action; close ends it.
@@ -222,6 +245,14 @@ build:assets` to check the initial JS budget.
 - Input hints use `--app-placeholder` / `text-app-placeholder` across native
   fields, chat composers, select prompts, and editable empty states. Keep
   entered text and adjacent labels on their own text tokens.
+- The Room and Thread composers keep the last 50 sent messages of up to
+  2,000 characters per draft scope in this browser's `localStorage`
+  (`room-drafts.ts`); a full quota drops older entries, and local sign-out
+  clears them with the drafts. From an empty draft, ArrowUp on the first line
+  and ArrowDown on the last line step through them, with a `History n/N`
+  label, unless a picker is open or an input method is composing; unsent text
+  is never replaced. Stepping past the newest message empties the composer;
+  editing a recalled message makes it the draft.
 - Room avatar stacks give each tile an opaque surface behind the member's
   portrait or initials so overlapping members never show through one another.
 - Compose conditional class names with `cn` from `src/lib/cn.ts`.
