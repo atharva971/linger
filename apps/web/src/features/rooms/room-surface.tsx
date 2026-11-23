@@ -1,4 +1,3 @@
-import { SharedStreamingStatusProvider } from "./chat/shared-streaming-status";
 import {
   useQuery,
   useQueryClient,
@@ -7,6 +6,7 @@ import {
 } from "@tanstack/react-query";
 import { Delete02Icon, SidebarRightIcon } from "@hugeicons/core-free-icons";
 import {
+  Fragment,
   lazy,
   Suspense,
   type CSSProperties,
@@ -608,9 +608,7 @@ function RoomCollaborationScope({
       enabled={voiceEnabled && (remote || roomOffersVoiceMaterials(room))}
       remote={remote}
     >
-      <SharedStreamingStatusProvider key={`${tenantId}:${room.id}`}>
-        {children}
-      </SharedStreamingStatusProvider>
+      <Fragment key={`${tenantId}:${room.id}`}>{children}</Fragment>
     </VoiceMaterialsProvider>
   );
 }
