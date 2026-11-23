@@ -149,21 +149,27 @@ func (m *FeishuMail) api(ctx context.Context, binary string, arguments json.RawM
 // in, holding every mail scope, with a mailbox whose address names the
 // connection.
 func (m *FeishuMail) status(ctx context.Context, binary string) map[string]any {
+	// auth check exits 1 when scopes are missing and still prints its report
+	// on stdout, so a report it printed is read whatever the exit code.
 	stdout, failure := m.run(ctx, binary, []string{"auth", "check", "--scope", strings.Join(FeishuMailScopes, " "), "--json"}, nil)
-	if failure != nil {
-		return failure
-	}
 	var check struct {
+		OK      *bool    `json:"ok"`
 		Missing []string `json:"missing"`
 	}
-	if json.Unmarshal(stdout, &check) != nil {
+	if json.Unmarshal(stdout, &check) != nil || check.OK == nil {
+		if failure != nil {
+			return failure
+		}
 		return map[string]any{"status": "failed"}
 	}
 	if len(check.Missing) > 0 {
 		result := map[string]any{"status": "missing_scope", "missing_scopes": check.Missing}
-		// A scope the app does not enable cannot be granted by logging in.
+		// A scope the app does not enable cannot be granted by logging in; the
+		// app's ID and brand let the owner find it in the developer console.
 		if appScopes, failure := m.run(ctx, binary, []string{"auth", "scopes"}, nil); failure == nil {
 			var enabled struct {
+				AppID      string   `json:"appId"`
+				Brand      string   `json:"brand"`
 				UserScopes []string `json:"userScopes"`
 			}
 			if json.Unmarshal(appScopes, &enabled) == nil {
@@ -174,6 +180,8 @@ func (m *FeishuMail) status(ctx context.Context, binary string) map[string]any {
 					}
 				}
 				result["app_missing_scopes"] = notEnabled
+				result["app_id"] = enabled.AppID
+				result["brand"] = enabled.Brand
 			}
 		}
 		return result
@@ -273,9 +281,10 @@ func (m *FeishuMail) loginWait(ctx context.Context, binary string, arguments jso
 	return map[string]any{"status": "ok"}
 }
 
-// run executes lark-cli and returns its stdout, or the result a failure
-// reports. lark-cli writes its error envelope to stderr; its type, subtype
-// and upstream code carry the decision, never its message.
+// run executes lark-cli and returns what it printed on stdout, and, when it
+// failed, the result the failure reports. lark-cli writes its error envelope
+// to stderr; its type, subtype and upstream code carry the decision, never
+// its message.
 func (m *FeishuMail) run(ctx context.Context, binary string, args []string, stdin []byte) ([]byte, map[string]any) {
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Env = append(append([]string(nil), m.env...), "LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1", "LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1")
@@ -292,9 +301,9 @@ func (m *FeishuMail) run(ctx context.Context, binary string, args []string, stdi
 	case err == nil:
 		return stdout.Bytes(), nil
 	case ctx.Err() != nil:
-		return nil, map[string]any{"status": "timeout"}
+		return stdout.Bytes(), map[string]any{"status": "timeout"}
 	}
-	return nil, larkFailure(stderr.Bytes())
+	return stdout.Bytes(), larkFailure(stderr.Bytes())
 }
 
 func larkFailure(stderr []byte) map[string]any {

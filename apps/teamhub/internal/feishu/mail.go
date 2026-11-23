@@ -1,12 +1,14 @@
 package feishu
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"strings"
 )
@@ -235,8 +237,48 @@ type draftResponse struct {
 	} `json:"data"`
 }
 
+// Address returns the address of the mailbox's primary mailbox, the identity
+// of a mail connection.
+func (m Mailbox) Address(ctx context.Context) (string, error) {
+	var response struct {
+		Data struct {
+			PrimaryEmailAddress string `json:"primary_email_address"`
+		} `json:"data"`
+	}
+	if err := m.do(ctx, "mailbox profile", http.MethodGet, "profile", nil, nil, &response); err != nil {
+		return "", err
+	}
+	address := strings.ToLower(strings.TrimSpace(response.Data.PrimaryEmailAddress))
+	if address == "" {
+		return "", errors.New("the Feishu mailbox has no primary address")
+	}
+	return address, nil
+}
+
+// withSender gives raw a From header naming the mailbox when it has none.
+// Feishu refuses a draft without one as an invalid MIME message, and the
+// messages TeamHub builds, shared with Gmail, which fills it in, carry none.
+func (m Mailbox) withSender(ctx context.Context, raw []byte) ([]byte, error) {
+	parsed, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		return nil, ErrMalformedMessage
+	}
+	if parsed.Header.Get("From") != "" {
+		return raw, nil
+	}
+	address, err := m.Address(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte("From: "+address+"\r\n"), raw...), nil
+}
+
 // CreateDraft saves raw, a whole RFC 5322 message, as a new draft.
 func (m Mailbox) CreateDraft(ctx context.Context, raw []byte) (string, error) {
+	raw, err := m.withSender(ctx, raw)
+	if err != nil {
+		return "", err
+	}
 	var response draftResponse
 	if err := m.do(ctx, "draft create", http.MethodPost, "drafts", nil, map[string]string{"raw": base64.URLEncoding.EncodeToString(raw)}, &response); err != nil {
 		return "", err
@@ -249,6 +291,10 @@ func (m Mailbox) CreateDraft(ctx context.Context, raw []byte) (string, error) {
 
 // UpdateDraft replaces the whole draft with raw.
 func (m Mailbox) UpdateDraft(ctx context.Context, draftID string, raw []byte) error {
+	raw, err := m.withSender(ctx, raw)
+	if err != nil {
+		return err
+	}
 	return m.do(ctx, "draft update", http.MethodPut, "drafts/"+url.PathEscape(draftID), nil, map[string]string{"raw": base64.URLEncoding.EncodeToString(raw)}, nil)
 }
 

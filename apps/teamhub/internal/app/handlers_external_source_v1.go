@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/composio"
@@ -237,11 +238,16 @@ func (a *App) writeFeishuConnectError(c *gin.Context, err error) bool {
 	var computer *feishu.ComputerError
 	switch {
 	case errors.As(err, &notEnabled):
-		details := make([]httpapi.ErrorDetail, 0, len(notEnabled.Scopes))
+		// The Web turns the details into steps: open the app's permissions
+		// page, add each scope, publish a version, connect again.
+		details := make([]httpapi.ErrorDetail, 0, len(notEnabled.Scopes)+1)
 		for _, scope := range notEnabled.Scopes {
 			details = append(details, httpapi.ErrorDetail{Field: "scope", Reason: scope})
 		}
-		a.writeErrorWithDetails(c, http.StatusConflict, "FEISHU_SCOPES_NOT_ENABLED", "The Feishu app your lark-cli uses does not enable these mail permissions. Enable them as user permissions in its developer console, publish a new version, and connect again.", details)
+		if notEnabled.PermissionsURL != "" {
+			details = append(details, httpapi.ErrorDetail{Field: "permissions_url", Reason: notEnabled.PermissionsURL})
+		}
+		a.writeErrorWithDetails(c, http.StatusConflict, "FEISHU_SCOPES_NOT_ENABLED", "The Feishu app your lark-cli uses does not enable these mail permissions: "+strings.Join(notEnabled.Scopes, ", ")+". Enable them as user permissions in its developer console, publish a new version, and connect again.", details)
 	case errors.As(err, &computer) && computer.Status == feishu.StatusComputerOffline:
 		a.writeError(c, http.StatusConflict, "FEISHU_COMPUTER_OFFLINE", "Feishu Mail runs through lark-cli on the Computer that runs your Another Me, and that Computer is offline. Start it and connect again.")
 	case errors.As(err, &computer) && computer.Status == feishu.StatusNotInstalled:

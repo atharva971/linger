@@ -143,11 +143,20 @@ func TestFeishuMailStatusNamesTheMailbox(t *testing.T) {
 
 func TestFeishuMailStatusTellsScopesTheAppDoesNotEnable(t *testing.T) {
 	tool, dir := fakeLarkCLI(t)
-	answer(t, dir, "auth-check", `{"ok":false,"missing":["mail:a","mail:b"]}`, "", 0)
-	answer(t, dir, "auth-scopes", `{"userScopes":["mail:a","docx:document:readonly"]}`, "", 0)
+	// lark-cli exits 1 when scopes are missing, with its report on stdout.
+	answer(t, dir, "auth-check", `{"ok":false,"missing":["mail:a","mail:b"]}`, "", 1)
+	answer(t, dir, "auth-scopes", `{"appId":"cli_test","brand":"lark","userScopes":["mail:a","docx:document:readonly"]}`, "", 0)
 	result := tool.Call(context.Background(), "status", nil)
-	want := map[string]any{"status": "missing_scope", "missing_scopes": []string{"mail:a", "mail:b"}, "app_missing_scopes": []string{"mail:b"}}
+	want := map[string]any{"status": "missing_scope", "missing_scopes": []string{"mail:a", "mail:b"}, "app_missing_scopes": []string{"mail:b"}, "app_id": "cli_test", "brand": "lark"}
 	if !reflect.DeepEqual(result, want) {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestFeishuMailStatusReportsAnOwnerWhoIsNotLoggedIn(t *testing.T) {
+	tool, dir := fakeLarkCLI(t)
+	answer(t, dir, "auth-check", "", `{"ok":false,"error":{"type":"authentication","subtype":"not_logged_in","message":"m"}}`, 3)
+	if result := tool.Call(context.Background(), "status", nil); result["status"] != "auth_required" {
 		t.Fatalf("result = %#v", result)
 	}
 }

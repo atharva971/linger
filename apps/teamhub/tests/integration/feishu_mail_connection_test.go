@@ -1,11 +1,13 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"slices"
 	"strconv"
 	"strings"
@@ -88,7 +90,7 @@ func (f *fakeFeishu) CallLocalComputerToolResult(_ context.Context, call nodeapi
 		case !f.loggedIn:
 			return map[string]any{"status": "auth_required"}, nil
 		case len(f.notEnabled) > 0:
-			return map[string]any{"status": "missing_scope", "missing_scopes": anyList(f.notEnabled), "app_missing_scopes": anyList(f.notEnabled)}, nil
+			return map[string]any{"status": "missing_scope", "missing_scopes": anyList(f.notEnabled), "app_missing_scopes": anyList(f.notEnabled), "app_id": "cli_fake", "brand": "feishu"}, nil
 		}
 		return map[string]any{"status": "ok", "address": "Zhang@Example.com"}, nil
 	case "login_start":
@@ -150,10 +152,16 @@ func (f *fakeFeishu) serveMail(method, path string, params, body map[string]any)
 			return map[string]any{"status": "failed", "code": float64(1234008), "error_subtype": "not_found", "detail": "message not found"}
 		}
 		return ok(map[string]any{"message": message})
+	case method == http.MethodGet && path == "profile":
+		return ok(map[string]any{"primary_email_address": "Zhang@Example.com"})
 	case method == http.MethodPost && path == "drafts":
 		raw, err := base64.URLEncoding.DecodeString(fmt.Sprint(body["raw"]))
 		if err != nil {
 			return map[string]any{"status": "failed", "code": float64(1230001), "detail": "raw must be base64url"}
+		}
+		// Feishu refuses a draft that does not name its sender.
+		if parsed, err := mail.ReadMessage(bytes.NewReader(raw)); err != nil || parsed.Header.Get("From") != "zhang@example.com" {
+			return map[string]any{"status": "failed", "code": float64(1230001), "detail": "invalid mime format"}
 		}
 		id := fmt.Sprintf("draft_%d", len(f.drafts)+1)
 		f.drafts[id] = raw
@@ -348,7 +356,8 @@ func TestFeishuMailConnectsThroughTheOwnersLarkCLI(t *testing.T) {
 	fake.setLoggedIn(true)
 	fake.setNotEnabled("mail:user_mailbox.message:send")
 	status, _, body = env.request(alice, http.MethodPost, "/v0/external-connections", map[string]string{"app_key": externalsource.FeishuMailAppKey}, "feishu-scopes")
-	if status != http.StatusConflict || !strings.Contains(string(body), "FEISHU_SCOPES_NOT_ENABLED") || !strings.Contains(string(body), "mail:user_mailbox.message:send") {
+	if status != http.StatusConflict || !strings.Contains(string(body), "FEISHU_SCOPES_NOT_ENABLED") || !strings.Contains(string(body), "mail:user_mailbox.message:send") ||
+		!strings.Contains(string(body), "https://open.feishu.cn/app/cli_fake/auth") {
 		t.Fatalf("scopes status=%d body=%s", status, body)
 	}
 	fake.setNotEnabled()

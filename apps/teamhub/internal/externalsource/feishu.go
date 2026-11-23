@@ -46,8 +46,12 @@ type FeishuComputer interface {
 
 // FeishuScopesNotEnabledError reports mail scopes the Feishu app behind the
 // owner's lark-cli does not enable: its console must enable them before a
-// login can grant them.
-type FeishuScopesNotEnabledError struct{ Scopes []string }
+// login can grant them. PermissionsURL is that app's permissions page, when
+// known.
+type FeishuScopesNotEnabledError struct {
+	Scopes         []string
+	PermissionsURL string
+}
 
 func (e *FeishuScopesNotEnabledError) Error() string {
 	return "the lark-cli Feishu app does not enable: " + strings.Join(e.Scopes, " ")
@@ -140,7 +144,7 @@ func (s *Service) createFeishuLinkInTx(ctx context.Context, tx pgx.Tx, accountID
 	switch {
 	case err == nil:
 	case errors.As(err, &missing) && len(missing.NotEnabled) > 0:
-		return composio.Link{}, &FeishuScopesNotEnabledError{Scopes: missing.NotEnabled}
+		return composio.Link{}, &FeishuScopesNotEnabledError{Scopes: missing.NotEnabled, PermissionsURL: missing.PermissionsURL()}
 	case feishu.IsAuthFailure(err):
 		login, err := mailbox.StartLogin(ctx, upstreamID)
 		if err != nil {

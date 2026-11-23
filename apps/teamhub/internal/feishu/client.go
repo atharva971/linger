@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -82,10 +83,30 @@ var ErrAuthorizationRequired = errors.New("the owner's lark-cli needs a Feishu l
 
 // ScopesMissingError reports a lark-cli login without every mail scope.
 // NotEnabled are the scopes its Feishu app does not enable at all: logging in
-// again cannot grant those until the app's console enables them.
+// again cannot grant those until the app's console enables them. AppID and
+// Brand name that app, when lark-cli reported them.
 type ScopesMissingError struct {
 	Scopes     []string
 	NotEnabled []string
+	AppID      string
+	Brand      string
+}
+
+// appIDPattern is the shape of an Open Platform app ID, which a console URL
+// may carry.
+var appIDPattern = regexp.MustCompile(`^cli_[A-Za-z0-9]{1,64}$`)
+
+// PermissionsURL is the permissions page of the lark-cli app in its
+// developer console, or empty when the app is unknown.
+func (e *ScopesMissingError) PermissionsURL() string {
+	if !appIDPattern.MatchString(e.AppID) {
+		return ""
+	}
+	console := "https://open.feishu.cn"
+	if e.Brand == "lark" {
+		console = "https://open.larksuite.com"
+	}
+	return console + "/app/" + e.AppID + "/auth"
 }
 
 func (e *ScopesMissingError) Error() string {
@@ -163,7 +184,9 @@ func statusError(operation string, result map[string]any) error {
 	case "ok":
 		return nil
 	case "missing_scope":
-		return &ScopesMissingError{Scopes: stringList(result["missing_scopes"]), NotEnabled: stringList(result["app_missing_scopes"])}
+		appID, _ := result["app_id"].(string)
+		brand, _ := result["brand"].(string)
+		return &ScopesMissingError{Scopes: stringList(result["missing_scopes"]), NotEnabled: stringList(result["app_missing_scopes"]), AppID: appID, Brand: brand}
 	case "auth_required":
 		return ErrAuthorizationRequired
 	case "failed":
