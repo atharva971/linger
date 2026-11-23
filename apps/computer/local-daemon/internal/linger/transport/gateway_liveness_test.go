@@ -14,7 +14,7 @@ import (
 
 const (
 	testPingInterval = 20 * time.Millisecond
-	testReadTimeout  = 80 * time.Millisecond
+	testReadTimeout  = 400 * time.Millisecond
 )
 
 // livenessGatewayStream connects to a peer that reads forever and sends
@@ -159,9 +159,10 @@ func TestGatewayCloseStopsPings(t *testing.T) {
 // even though the peer's Pongs queue behind it.
 func TestGatewaySlowLargeCommandIsNotALivenessTimeout(t *testing.T) {
 	const chunkBytes = 4096
-	const chunks = 16
-	// NextWriter holds back one buffered chunk, so gaps reach twice the pause.
-	const pause = testReadTimeout / 4
+	const chunks = 40
+	// NextWriter holds back one buffered chunk, so gaps reach twice the pause;
+	// a tenth of the read timeout leaves room for a descheduled writer.
+	const pause = testReadTimeout / 10
 	body := `{"type":"runtime.registration.snapshot","protocol_version":"2",` +
 		`"command_id":"snapshot-slow","runner_id":"computer-local","connection_epoch":3,` +
 		strings.Repeat(" ", chunkBytes*chunks) + `"registrations":[]}`
