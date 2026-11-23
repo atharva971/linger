@@ -122,21 +122,7 @@ func (s *Service) runVoiceLiveAppTool(ctx context.Context, session voicelive.Ses
 				"include_payload": false, "include_spam_trash": false,
 			})
 		} else {
-			folder := map[string]string{"all": "allfolders", "sent": "sentitems"}[args.Folder]
-			if folder == "" {
-				folder = "inbox"
-			}
-			arguments := map[string]any{"top": voicelive.AppResultLimit, "folder": folder}
-			if bool(args.UnreadOnly) {
-				arguments["filter"] = "receivedDateTime ge 0001-01-01T00:00:00Z and isRead eq false"
-			}
-			slug := "OUTLOOK_QUERY_EMAILS"
-			if strings.TrimSpace(args.Query) != "" {
-				slug, arguments["search"] = "OUTLOOK_LIST_MESSAGES", strings.TrimSpace(args.Query)
-			} else {
-				arguments["orderby"] = []string{"receivedDateTime desc"}
-			}
-			raw, output, err = call(slug, arguments)
+			raw, output, err = call(voicelive.OutlookMailSearch(args.Query, args.Folder, bool(args.UnreadOnly)))
 		}
 		if output != "" || err != nil {
 			return output, err

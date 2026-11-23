@@ -205,6 +205,29 @@ func GmailQuery(query, folder string, unreadOnly bool) string {
 	return strings.Join(parts, " ")
 }
 
+// OutlookMailSearch is the Outlook read the connector command makes. Composio's
+// OUTLOOK_QUERY_EMAILS reads exactly one folder, so a search and the whole
+// mailbox ("allfolders") go through OUTLOOK_LIST_MESSAGES.
+func OutlookMailSearch(query, folder string, unreadOnly bool) (string, map[string]any) {
+	mailFolder := map[string]string{"all": "allfolders", "sent": "sentitems"}[folder]
+	if mailFolder == "" {
+		mailFolder = "inbox"
+	}
+	arguments := map[string]any{"top": AppResultLimit, "folder": mailFolder}
+	if unreadOnly {
+		arguments["filter"] = "receivedDateTime ge 0001-01-01T00:00:00Z and isRead eq false"
+	}
+	if query = strings.TrimSpace(query); query != "" {
+		arguments["search"] = query
+	} else {
+		arguments["orderby"] = []string{"receivedDateTime desc"}
+	}
+	if query != "" || folder == "all" {
+		return "OUTLOOK_LIST_MESSAGES", arguments
+	}
+	return "OUTLOOK_QUERY_EMAILS", arguments
+}
+
 func record(value any) map[string]any {
 	if m, ok := value.(map[string]any); ok {
 		return m
