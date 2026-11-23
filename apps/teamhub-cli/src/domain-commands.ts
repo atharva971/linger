@@ -115,6 +115,7 @@ export function domainHelp(prefix: readonly string[] = []): string {
     [
       "gmail",
       "outlook",
+      "feishu-mail",
       "outlook-calendar",
       "slack",
       "gcal",

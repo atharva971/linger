@@ -3475,6 +3475,7 @@ func (e RoutineChangedPayloadChangeKind) Valid() bool {
 
 // Defines values for RoutineListenerApp.
 const (
+	RoutineListenerAppFeishuMail      RoutineListenerApp = "feishu_mail"
 	RoutineListenerAppGmail           RoutineListenerApp = "gmail"
 	RoutineListenerAppGoogleCalendar  RoutineListenerApp = "google_calendar"
 	RoutineListenerAppOutlook         RoutineListenerApp = "outlook"
@@ -3485,6 +3486,8 @@ const (
 // Valid indicates whether the value is a known member of the RoutineListenerApp enum.
 func (e RoutineListenerApp) Valid() bool {
 	switch e {
+	case RoutineListenerAppFeishuMail:
+		return true
 	case RoutineListenerAppGmail:
 		return true
 	case RoutineListenerAppGoogleCalendar:
@@ -5297,6 +5300,14 @@ type CardChangedPayload struct {
 type CompleteExternalConnectionAuthorizationRequest struct {
 	// ConnectedAccountId The connected account the Composio callback named, when it named one.
 	ConnectedAccountId *string `json:"connected_account_id,omitempty"`
+}
+
+// CompleteFeishuAuthorizationRequest defines model for CompleteFeishuAuthorizationRequest.
+type CompleteFeishuAuthorizationRequest struct {
+	Code string `json:"code"`
+
+	// State The state Feishu returned to the redirect page, as TeamHub issued it.
+	State string `json:"state"`
 }
 
 // ComputerPermissionAction One step the owner takes on their own Mac. prompt raises the macOS prompt, open_settings opens the System Settings pane, and relaunch restarts the Linger desktop app so a new grant takes effect.
@@ -7292,7 +7303,10 @@ type MailCanvasState struct {
 	SourceDigest string                `json:"source_digest"`
 	Status       MailCanvasStateStatus `json:"status"`
 	Subject      string                `json:"subject"`
-	To           string                `json:"to"`
+
+	// Target The canvas's mail app, gmail or feishu_mail; Send must use a connection of this app.
+	Target *string `json:"target,omitempty"`
+	To     string  `json:"to"`
 }
 
 // MailCanvasStateStatus defines model for MailCanvasState.Status.
@@ -10677,6 +10691,9 @@ type SaveExternalProviderKeyJSONRequestBody = SaveExternalProviderKeyRequest
 
 // CompleteExternalConnectionAuthorizationJSONRequestBody defines body for CompleteExternalConnectionAuthorization for application/json ContentType.
 type CompleteExternalConnectionAuthorizationJSONRequestBody = CompleteExternalConnectionAuthorizationRequest
+
+// CompleteFeishuAuthorizationJSONRequestBody defines body for CompleteFeishuAuthorization for application/json ContentType.
+type CompleteFeishuAuthorizationJSONRequestBody = CompleteFeishuAuthorizationRequest
 
 // CreateExternalConnectionJSONRequestBody defines body for CreateExternalConnection for application/json ContentType.
 type CreateExternalConnectionJSONRequestBody = CreateExternalConnectionRequest

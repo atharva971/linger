@@ -104,6 +104,11 @@ Rooms / Chat   checks identity, membership and capability on every call
 Composio       holds the app keys; an approved write runs exactly once
 ```
 
+<sub>Feishu Mail is the exception: Composio has no Feishu toolkit, so TeamHub
+authorizes it with the deployment's own Feishu custom app, configured in the
+server environment, and keeps the tokens itself. People connect it from the
+authorization card an Agent posts in chat, not from the Apps page.</sub>
+
 | Concern                    | How                                                                                                                        |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | One definition per command | Help, `--schema` and the permission manifest are generated from the same list                                              |

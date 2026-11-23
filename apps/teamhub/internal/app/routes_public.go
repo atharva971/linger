@@ -67,6 +67,7 @@ func (a *App) publicRoutes() []contractRoute {
 		route(http.MethodGet, "/v0/external-apps", nil, session, a.listExternalApps),
 		route(http.MethodPut, "/v0/external-apps/provider-key", nil, session, a.saveExternalProviderKey),
 		route(http.MethodPost, "/v0/external-connection-completions", nil, session, a.completeExternalConnectionAuthorization),
+		route(http.MethodPost, "/v0/external-connection-completions/feishu", nil, a.completeFeishuAuthorization),
 		route(http.MethodGet, "/v0/external-connections", nil, session, a.listExternalConnections),
 		route(http.MethodPost, "/v0/external-connections", nil, session, a.createExternalConnection),
 		route(http.MethodGet, "/v0/external-connections/:externalConnectionId", nil, session, a.getExternalConnection),

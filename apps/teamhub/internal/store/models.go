@@ -818,6 +818,20 @@ type ExternalMailImportDocument struct {
 	ConnectionID string `json:"connection_id"`
 }
 
+type FeishuUpstreamToken struct {
+	UpstreamID             string             `json:"upstream_id"`
+	Region                 string             `json:"region"`
+	AppID                  string             `json:"app_id"`
+	CodeVerifierCiphertext []byte             `json:"code_verifier_ciphertext"`
+	AccessTokenCiphertext  []byte             `json:"access_token_ciphertext"`
+	RefreshTokenCiphertext []byte             `json:"refresh_token_ciphertext"`
+	AccessExpiresAt        pgtype.Timestamptz `json:"access_expires_at"`
+	RefreshExpiresAt       pgtype.Timestamptz `json:"refresh_expires_at"`
+	Scopes                 []string           `json:"scopes"`
+	AuthorizedAt           pgtype.Timestamptz `json:"authorized_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+}
+
 type GmailCanvasDraft struct {
 	ConnectionID string `json:"connection_id"`
 	DraftID      string `json:"draft_id"`

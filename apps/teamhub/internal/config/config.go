@@ -101,13 +101,20 @@ type JobsConfig struct {
 	SkillPackageProbeRetry time.Duration
 }
 
-// ExternalAppsConfig configures connected apps through Composio. The API key
-// may also be saved on the Apps page, so the feature is decided at use time.
+// ExternalAppsConfig configures connected apps through Composio, and Feishu
+// Mail through the deployment's Feishu custom app. The Composio API key may
+// also be saved on the Apps page, so that feature is decided at use time.
 type ExternalAppsConfig struct {
-	ComposioEnvironmentKey      string // prefixes each Composio user ID; deployments sharing a Composio project need distinct keys
-	ComposioBaseURL             string // empty is the Composio API; tests point it at a fake provider
-	ComposioAPIKey              string
-	SecretEncryptionKey         string // base64 32-byte key; encrypts the Composio API key saved in the product
+	ComposioEnvironmentKey string // prefixes each Composio user ID; deployments sharing a Composio project need distinct keys
+	ComposioBaseURL        string // empty is the Composio API; tests point it at a fake provider
+	FeishuBaseURL          string // empty is the Feishu and Lark Open Platform; tests point it at a fake one
+	ComposioAPIKey         string
+	SecretEncryptionKey    string // base64 32-byte key; encrypts the Composio API key saved in the product and Feishu user tokens
+	// The deployment's Feishu or Lark enterprise custom app. Feishu serves its
+	// mail APIs to such apps only; an empty App ID leaves Feishu Mail off.
+	FeishuAppID                 string
+	FeishuAppSecret             string
+	FeishuAppRegion             string // feishu or lark
 	MaxRetryAfter               time.Duration
 	AppImportProviderCallBudget int
 }
@@ -278,6 +285,7 @@ func Default() Config {
 		PublicWebURL:                "http://localhost:3000",
 		ExternalApps: ExternalAppsConfig{
 			ComposioEnvironmentKey:      DefaultComposioEnvironmentKey,
+			FeishuAppRegion:             "feishu",
 			MaxRetryAfter:               10 * time.Second,
 			AppImportProviderCallBudget: 100,
 		},
@@ -314,6 +322,9 @@ func applyEnvironment(cfg *Config) {
 	setNonemptyEnvironment(&cfg.ExternalApps.ComposioEnvironmentKey, "TEAMHUB_COMPOSIO_ENVIRONMENT_KEY")
 	setNonemptyEnvironment(&cfg.ExternalApps.ComposioAPIKey, "COMPOSIO_API_KEY")
 	setNonemptyEnvironment(&cfg.ExternalApps.SecretEncryptionKey, "TEAMHUB_SECRET_ENCRYPTION_KEY")
+	setNonemptyEnvironment(&cfg.ExternalApps.FeishuAppID, "FEISHU_APP_ID")
+	setNonemptyEnvironment(&cfg.ExternalApps.FeishuAppSecret, "FEISHU_APP_SECRET")
+	setNonemptyEnvironment(&cfg.ExternalApps.FeishuAppRegion, "FEISHU_APP_REGION")
 	setNonemptyEnvironment(&cfg.LocalIdentityKey, "TEAMHUB_LOCAL_IDENTITY_KEY")
 	setNonemptyEnvironment(&cfg.Voice.SonioxAPIKey, "SONIOX_API_KEY")
 	setNonemptyEnvironment(&cfg.Voice.XaiAPIKey, "XAI_API_KEY")
@@ -392,6 +403,9 @@ func validate(cfg *Config) error {
 			return errors.New("TEAMHUB_SECRET_ENCRYPTION_KEY must be 32 bytes in standard base64")
 		}
 	}
+	if err := validateFeishuApp(cfg.ExternalApps); err != nil {
+		return err
+	}
 	if cfg.LocalIdentityKey != "" {
 		if _, err := localidentity.DecodeKey(cfg.LocalIdentityKey); err != nil {
 			return err
@@ -409,6 +423,20 @@ func validate(cfg *Config) error {
 
 // validatePublicURL canonicalizes WEB_PUBLIC_ORIGIN and derives the settings
 // that follow the product's external address.
+// validateFeishuApp refuses a half-configured Feishu app at startup, where a
+// deployment can be fixed, instead of at a user's first consent.
+func validateFeishuApp(apps ExternalAppsConfig) error {
+	switch {
+	case apps.FeishuAppRegion != "feishu" && apps.FeishuAppRegion != "lark":
+		return errors.New("FEISHU_APP_REGION must be feishu or lark")
+	case (apps.FeishuAppID == "") != (apps.FeishuAppSecret == ""):
+		return errors.New("FEISHU_APP_ID and FEISHU_APP_SECRET must be set together")
+	case apps.FeishuAppID != "" && apps.SecretEncryptionKey == "":
+		return errors.New("FEISHU_APP_ID needs TEAMHUB_SECRET_ENCRYPTION_KEY to seal Feishu user tokens")
+	}
+	return nil
+}
+
 func validatePublicURL(cfg *Config) error {
 	parsed, err := url.Parse(cfg.PublicWebURL)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {

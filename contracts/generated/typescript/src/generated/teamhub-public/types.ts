@@ -1991,6 +1991,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v0/external-connection-completions/feishu": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Exchange the code a returning Feishu consent page carries.
+     * @description The Feishu redirect page calls this with the state and code Feishu returned. It needs no session, since the user may consent in a browser that is not signed in: the signed state names the pending authorization, and its PKCE verifier binds the code to it. TeamHub stores the user's tokens and checks the connection or reauthorization at once; its result arrives as a connection change. FEISHU_SCOPES_MISSING lists each missing scope as a detail.
+     */
+    post: operations["completeFeishuAuthorization"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v0/external-connections/{externalConnectionId}": {
     parameters: {
       query?: never;
@@ -5987,7 +6007,8 @@ export interface components {
         | "outlook"
         | "google_calendar"
         | "outlook_calendar"
-        | "slack";
+        | "slack"
+        | "feishu_mail";
     };
     /** @description A Routine has exactly one of cadence and listener. A listener Routine is AnotherMe's app listener; it can only be paused and resumed, and goes away when the Human revokes AnotherMe's access to the app. */
     Routine: {
@@ -7043,6 +7064,11 @@ export interface components {
       /** @description The connected account the Composio callback named, when it named one. */
       connected_account_id?: string;
     };
+    CompleteFeishuAuthorizationRequest: {
+      /** @description The state Feishu returned to the redirect page, as TeamHub issued it. */
+      state: string;
+      code: string;
+    };
     SetExternalConnectionAutoRemindersRequest: {
       enabled: boolean;
     };
@@ -7796,6 +7822,8 @@ export interface components {
         | "failed"
         | "unknown"
         | "declined";
+      /** @description The canvas's mail app, gmail or feishu_mail; Send must use a connection of this app. */
+      target?: string;
       subject: string;
       to: string;
       error?: string;
@@ -11891,6 +11919,32 @@ export interface operations {
       400: components["responses"]["BadRequest"];
       401: components["responses"]["Unauthenticated"];
       404: components["responses"]["NotFound"];
+    };
+  };
+  completeFeishuAuthorization: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CompleteFeishuAuthorizationRequest"];
+      };
+    };
+    responses: {
+      /** @description The authorization is stored and its check is due. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      400: components["responses"]["BadRequest"];
+      404: components["responses"]["NotFound"];
+      409: components["responses"]["Conflict"];
+      503: components["responses"]["ServiceUnavailable"];
     };
   };
   getExternalConnection: {

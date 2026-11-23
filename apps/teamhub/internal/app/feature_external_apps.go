@@ -12,6 +12,7 @@ import (
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/composio"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/config"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/externalsource"
+	"github.com/simplexai-labs/linger/apps/teamhub/internal/feishu"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/proactive"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/reminder"
 	"github.com/simplexai-labs/linger/apps/teamhub/internal/secretbox"
@@ -21,7 +22,7 @@ import (
 // registerExternalApps builds connected apps over Composio, or over the
 // provider a test injects. The Composio API key can be saved on the Apps page
 // after start, so connected apps are built either way; each job and each Agent
-// request checks connectedAppsConfigured when it runs.
+// request checks connectionProvidersConfigured when it runs.
 func (a *App) registerExternalApps(ctx context.Context, cfg config.ExternalAppsConfig, injected externalsource.Provider, agentAuthorization *agentauth.Service) error {
 	client, err := composio.New(composio.Config{
 		BaseURL: cfg.ComposioBaseURL, APIKey: cfg.ComposioAPIKey, EnvironmentKey: cfg.ComposioEnvironmentKey,
@@ -54,8 +55,13 @@ func (a *App) registerExternalApps(ctx context.Context, cfg config.ExternalAppsC
 	if err = sources.ConfigureManagedApps(ctx, client, keyBox); err != nil {
 		return fmt.Errorf("configure managed connected apps: %w", err)
 	}
+	sources.ConfigureFeishu(feishu.New(feishu.Config{
+		BaseURL: cfg.FeishuBaseURL, HTTPClient: &http.Client{Timeout: config.ExternalSourceRequestTimeout},
+	}), client, feishu.App{Region: feishu.Region(cfg.FeishuAppRegion), ID: cfg.FeishuAppID, Secret: cfg.FeishuAppSecret},
+		keyBox, a.signingKey, externalsource.FeishuRedirectURL(a.cfg.PublicWebURL))
 	a.externalSources = sources
-	a.agentConnectedApps = agentconnectedapps.New(a.pool, agentAuthorization, sources, client)
+	a.agentConnectedApps = agentconnectedapps.New(a.pool, agentAuthorization, sources,
+		agentconnectedapps.WithNativeToolkit(client, sources.FeishuMailTools()))
 	a.agentConnectedApps.SetLogger(a.logger)
 	return nil
 }
@@ -63,7 +69,7 @@ func (a *App) registerExternalApps(ctx context.Context, cfg config.ExternalAppsC
 // addExternalAppJobs registers the connected app workers and sweeps, and
 // AnotherMe's app listener ones when appListeners is set.
 func (a *App) addExternalAppJobs(features *featureSet, appListeners bool) {
-	externalsource.AddJobWorkers(features.workers, a.externalSources, a.connectedAppsConfigured)
+	externalsource.AddJobWorkers(features.workers, a.externalSources, a.connectionProvidersConfigured)
 	river.AddWorker(features.workers, &connectionAuthorizationSettleWorker{app: a})
 	river.AddWorker(features.workers, &profileSetupReminderWorker{app: a})
 	features.schedule(a.connectedAppSweeps(features.workers)...)
@@ -71,7 +77,7 @@ func (a *App) addExternalAppJobs(features *featureSet, appListeners bool) {
 		return
 	}
 	// AnotherMe's app listeners feed proactive judgement, not a direct wake.
-	reminder.AddListenerJobWorkers(features.workers, a.reminders, a.composioClient, proactive.RouteListenerEvents, a.logger, a.connectedAppsConfigured)
+	reminder.AddListenerJobWorkers(features.workers, a.reminders, a.composioClient, proactive.RouteListenerEvents, a.logger, a.connectionProvidersConfigured)
 	// The proactive service is built after the features register.
 	addSweepWorker[proactiveListenerSweepArgs](features.workers, func(ctx context.Context) error {
 		return a.proactive.SweepListeners(ctx)
@@ -82,11 +88,11 @@ func (a *App) addExternalAppJobs(features *featureSet, appListeners bool) {
 	)
 }
 
-// connectedAppsConfigured reports whether TeamHub has a Composio API key now:
-// from COMPOSIO_API_KEY, or saved on the Apps page without a restart. Agent
-// prompts, CLI actions and app jobs read it at use time.
-func (a *App) connectedAppsConfigured() bool {
-	return a.externalSources != nil && a.externalSources.ProviderConfigured()
+// connectionProvidersConfigured reports whether any connection provider works
+// now: Composio, or the Feishu custom app. Connection lifecycle jobs run
+// while either does.
+func (a *App) connectionProvidersConfigured() bool {
+	return a.externalSources != nil && a.externalSources.ConnectionProvidersConfigured()
 }
 
 // agentConnectedAppKeys lists the keys of the apps with an account granted to

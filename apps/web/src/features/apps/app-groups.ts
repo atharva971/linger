@@ -14,10 +14,11 @@ export interface AppGroup {
 
 /**
  * The Connectors page sections, ordered by how central each kind of app is to
- * daily work. TeamHub apps listed in no group (Google Drive, Facebook) stay
- * connectable elsewhere but are not offered on this page, so an app TeamHub
- * adds later appears here only once it is added to a group. Group names avoid
- * product nouns such as Profile, Chats, Docs, Projects and Sources.
+ * daily work. TeamHub apps listed in no group (Google Drive, Facebook, Feishu
+ * Mail, which an Agent asks for in chat) stay connectable elsewhere but are not
+ * offered on this page, so an app TeamHub adds later appears here only once it
+ * is added to a group. Group names avoid product nouns such as Profile, Chats,
+ * Docs, Projects and Sources.
  */
 /** The Connectors tab for web search, beside the Composio app groups. */
 export const WEB_SEARCH_FILTER = {
@@ -65,6 +66,7 @@ const APP_SUMMARIES: Record<string, Message> = {
   canva: m.summaryCanva,
   discord: m.summaryDiscord,
   fal_ai: m.summaryFalAi,
+  feishu_mail: m.summaryMail,
   figma: m.summaryFigma,
   github: m.summaryGitHub,
   gmail: m.summaryMail,
@@ -100,6 +102,7 @@ const APP_DESCRIPTIONS: Record<string, Message<string>> = {
   discord: d.discord,
   facebook: d.facebook,
   fal_ai: d.falAi,
+  feishu_mail: d.feishuMail,
   figma: d.figma,
   github: d.github,
   gmail: d.mail,

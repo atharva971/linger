@@ -166,6 +166,7 @@ export function createHttpTeamHubClient(
 
 const externalSourceClientMethods = [
   "completeExternalConnectionAuthorization",
+  "completeFeishuAuthorization",
   "createExternalConnection",
   "createExternalConnectionReauthorization",
   "createExternalConnectionStatusCheck",

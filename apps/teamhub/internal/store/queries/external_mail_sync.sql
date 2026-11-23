@@ -3,7 +3,7 @@
 -- and whose sync position is before due.
 SELECT id, revision
 FROM external_connections
-WHERE provider IN ('gmail', 'outlook') AND status = 'active'
+WHERE provider IN ('gmail', 'outlook', 'feishu_mail') AND status = 'active'
   AND mail_import_status = 'completed' AND mail_import_revision = revision
   AND mail_synced_until < sqlc.arg(due)::timestamptz
 ORDER BY id;

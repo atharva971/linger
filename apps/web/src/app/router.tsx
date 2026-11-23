@@ -164,6 +164,14 @@ export function createAppRoutes(
       path: OAUTH_COMPLETE_PATH,
     },
     {
+      path: "/oauth/feishu-complete",
+      lazy: async () => {
+        const { FeishuOAuthCompletePage } =
+          await import("@/features/apps/feishu-oauth-complete-page");
+        return { Component: FeishuOAuthCompletePage };
+      },
+    },
+    {
       ErrorBoundary: FullPageRouteErrorSurface,
       lazy: () =>
         authenticationOperation(

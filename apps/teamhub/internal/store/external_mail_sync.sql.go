@@ -84,7 +84,7 @@ func (q *Queries) GetMailSync(ctx context.Context, arg GetMailSyncParams) (GetMa
 const listMailSyncConnections = `-- name: ListMailSyncConnections :many
 SELECT id, revision
 FROM external_connections
-WHERE provider IN ('gmail', 'outlook') AND status = 'active'
+WHERE provider IN ('gmail', 'outlook', 'feishu_mail') AND status = 'active'
   AND mail_import_status = 'completed' AND mail_import_revision = revision
   AND mail_synced_until < $1::timestamptz
 ORDER BY id

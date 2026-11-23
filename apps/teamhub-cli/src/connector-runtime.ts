@@ -29,6 +29,7 @@ export interface ConnectorBinding {
 export const appKeys: Record<string, string> = {
   gmail: "gmail",
   outlook: "outlook",
+  "feishu-mail": "feishu_mail",
   slack: "slack",
   gcal: "google_calendar",
   notion: "notion",
@@ -38,11 +39,18 @@ export const appKeys: Record<string, string> = {
   fal: "fal_ai",
   higgsfield: "higgsfield",
 };
+/**
+ * Feishu Mail attachments travel inside the tool call, which TeamHub caps at
+ * 1 MiB, so their base64 must leave room for the body and the request.
+ */
+export const FEISHU_MAIL_ATTACHMENT_BUDGET = 640 * 1024;
 // Dated toolkit pins from the official catalog, reviewed 2026-10-16 (fal and
 // Higgsfield on 2026-11-05, GitHub on 2026-11-06).
 export const connectorVersions: Record<string, string> = {
   gmail: "20261015_00",
   outlook: "20261014_00",
+  // TeamHub serves Feishu Mail's tools itself, at this version.
+  "feishu-mail": "20261121_00",
   slack: "20261015_00",
   gcal: "20261010_00",
   notion: "20261008_00",
@@ -355,6 +363,17 @@ export function connectorDefinition(spec: ConnectorSpec): CommandDefinition {
         throw new ConnectorError(
           "too_large",
           "The encoded Gmail message would exceed its 25 MiB limit.",
+        );
+      if (
+        app === "feishu-mail" &&
+        files.reduce(
+          (total, file) => total + Math.ceil(file.sizeBytes / 3) * 4,
+          0,
+        ) > FEISHU_MAIL_ATTACHMENT_BUDGET
+      )
+        throw new ConnectorError(
+          "too_large",
+          "Feishu Mail attachments sent through Linger are limited to about 640 KiB in total; share a link instead.",
         );
       if (
         app === "outlook" &&

@@ -29,6 +29,7 @@ import type {
 } from "./room-document-blocknote-editor";
 import type { RoomDocumentCollaborationSession } from "./room-document-collaboration";
 import type { UnifiedDocumentPageModel } from "./use-unified-document-page-model";
+import { isMailCanvasTarget } from "./canvas/canvas-targets";
 
 interface UnifiedDocumentBodyProps {
   documentContentRef: MutableRefObject<HTMLDivElement | null>;
@@ -151,7 +152,7 @@ function UnifiedDocumentEditorLayout({
     setHeadings,
     tenantId,
   } = model;
-  const mailCanvas = model.canvasTarget === "gmail";
+  const mailCanvas = isMailCanvasTarget(model.canvasTarget);
   return (
     <div
       className={`room-document-layout mx-auto min-h-full${knowledgeTitle !== undefined ? " room-document-layout--knowledge" : ""}`}

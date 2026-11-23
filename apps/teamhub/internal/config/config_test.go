@@ -30,6 +30,10 @@ var teamhubEnvironment = []string{
 	"LIVEKIT_API_URL",
 	"LIVEKIT_API_KEY",
 	"LIVEKIT_API_SECRET",
+	"TEAMHUB_SECRET_ENCRYPTION_KEY",
+	"FEISHU_APP_ID",
+	"FEISHU_APP_SECRET",
+	"FEISHU_APP_REGION",
 }
 
 func TestLoadMigrationDefaults(t *testing.T) {
@@ -344,6 +348,9 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 		{name: "Artifact storage root required", env: map[string]string{"TEAMHUB_DATABASE_URL": "postgres://example", "TEAMHUB_ARTIFACT_STORAGE_ROOT": " "}},
 		{name: "invalid Composio environment key", env: map[string]string{"TEAMHUB_DATABASE_URL": "postgres://example", "TEAMHUB_COMPOSIO_ENVIRONMENT_KEY": "Shared:Env"}},
 		{name: "local identity key must be 32 bytes", env: map[string]string{"TEAMHUB_DATABASE_URL": "postgres://example", "TEAMHUB_LOCAL_IDENTITY_KEY": "c2hvcnQ="}},
+		{name: "Feishu region must be feishu or lark", env: map[string]string{"TEAMHUB_DATABASE_URL": "postgres://example", "FEISHU_APP_REGION": "china"}},
+		{name: "Feishu App ID needs its secret", env: map[string]string{"TEAMHUB_DATABASE_URL": "postgres://example", "FEISHU_APP_ID": "cli_test", "TEAMHUB_SECRET_ENCRYPTION_KEY": testEncryptionKey}},
+		{name: "Feishu app needs the encryption key", env: map[string]string{"TEAMHUB_DATABASE_URL": "postgres://example", "FEISHU_APP_ID": "cli_test", "FEISHU_APP_SECRET": "secret"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -355,6 +362,30 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 				t.Fatal("Load accepted invalid configuration")
 			}
 		})
+	}
+}
+
+const testEncryptionKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+func TestLoadFeishuApp(t *testing.T) {
+	clearTeamHubEnvironment(t)
+	t.Setenv("TEAMHUB_DATABASE_URL", "postgres://example")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ExternalApps.FeishuAppID != "" || cfg.ExternalApps.FeishuAppRegion != "feishu" {
+		t.Fatalf("defaults = %+v", cfg.ExternalApps)
+	}
+	t.Setenv("FEISHU_APP_ID", "cli_test")
+	t.Setenv("FEISHU_APP_SECRET", "secret")
+	t.Setenv("FEISHU_APP_REGION", "lark")
+	t.Setenv("TEAMHUB_SECRET_ENCRYPTION_KEY", testEncryptionKey)
+	if cfg, err = Load(); err != nil {
+		t.Fatal(err)
+	}
+	if apps := cfg.ExternalApps; apps.FeishuAppID != "cli_test" || apps.FeishuAppSecret != "secret" || apps.FeishuAppRegion != "lark" {
+		t.Fatalf("Feishu app = %q %q %q", apps.FeishuAppID, apps.FeishuAppSecret, apps.FeishuAppRegion)
 	}
 }
 
